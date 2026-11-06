@@ -841,3 +841,66 @@ def subspace_cosines(A, B):
 
     return cosines
 
+# Step 14 - offline_vs_truth
+def offline_vs_truth(params, test, world):
+    # Unpack the held-out test data
+    users, items, ratings = test
+
+    # Convert test data to NumPy arrays
+    users = np.asarray(users, dtype=int)
+    items = np.asarray(items, dtype=int)
+    ratings = np.asarray(ratings, dtype=float)
+
+    # --------------------------------------------------
+    # 1. Calculate offline RMSE on held-out observations
+    # --------------------------------------------------
+
+    # Predict ratings for the held-out user-item pairs
+    test_predictions = mf_predict(params, users, items)
+
+    # Calculate offline RMSE
+    # rmse() automatically clips predictions to [1, 5]
+    offline_rmse = rmse(ratings, test_predictions)
+
+    # --------------------------------------------------
+    # 2. Generate predictions for all user-item pairs
+    # --------------------------------------------------
+
+    # Calculate the full prediction matrix
+    P = (
+        params["mu"]
+        + params["b"][:, None]
+        + params["c"][None, :]
+        + params["U"] @ params["V"].T
+    )
+
+    # Calculate the ground-truth expected rating matrix
+    E = expected_ratings(world)
+
+    # Clip both matrices to the valid rating range
+    Pc = np.clip(P, 1.0, 5.0)
+    Ec = np.clip(E, 1.0, 5.0)
+
+    # --------------------------------------------------
+    # 3. Calculate truth RMSE over all user-item pairs
+    # --------------------------------------------------
+
+    truth_rmse = float(
+        np.sqrt(np.mean((Pc - Ec) ** 2))
+    )
+
+    # --------------------------------------------------
+    # 4. Calculate prediction and ground-truth means
+    # --------------------------------------------------
+
+    pred_mean = float(np.mean(Pc))
+    true_mean = float(np.mean(Ec))
+
+    # Return all evaluation metrics as Python floats
+    return {
+        "offline_rmse": float(offline_rmse),
+        "truth_rmse": truth_rmse,
+        "pred_mean": pred_mean,
+        "true_mean": true_mean
+    }
+

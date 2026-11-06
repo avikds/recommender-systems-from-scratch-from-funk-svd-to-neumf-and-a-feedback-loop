@@ -23,6 +23,7 @@ python scaffold.py
 - [x] **11.** als_biased
 - [x] **12.** pmf_objective
 - [x] **13.** subspace_cosines
+- [x] **14.** offline_vs_truth
 
 ---
 
