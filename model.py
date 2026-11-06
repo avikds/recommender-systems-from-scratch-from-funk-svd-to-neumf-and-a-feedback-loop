@@ -163,3 +163,94 @@ def split_per_user(users, items, ratings, test_frac, seed):
         (users[test_idx], items[test_idx], ratings[test_idx])
     )
 
+# Step 4 - dataset_stats
+def gini(counts):
+    # Sort counts in ascending order
+    x = np.sort(np.asarray(counts, dtype=float))
+
+    n = len(x)
+    total = np.sum(x)
+
+    # Handle empty or all-zero counts
+    if n == 0 or total == 0:
+        return 0.0
+
+    # Calculate the Gini coefficient
+    indices = np.arange(1, n + 1)
+
+    gini_value = np.sum((2 * indices - n - 1) * x) / (n * total)
+
+    return float(gini_value)
+
+
+def dataset_stats(users, items, ratings, n_users, n_items):
+    # Convert inputs to NumPy arrays
+    users = np.asarray(users)
+    items = np.asarray(items)
+    ratings = np.asarray(ratings)
+
+    # Total number of observed ratings
+    n_ratings = len(ratings)
+
+    # Calculate rating density
+    density = (
+        n_ratings / (n_users * n_items)
+        if n_users * n_items > 0 else 0.0
+    )
+
+    # Calculate mean and population standard deviation
+    mean = float(np.mean(ratings)) if n_ratings > 0 else 0.0
+    std = float(np.std(ratings)) if n_ratings > 0 else 0.0
+
+    # Calculate histogram counts for ratings 1 through 5
+    hist = [
+        int(np.count_nonzero(ratings == rating))
+        for rating in range(1, 6)
+    ]
+
+    # Calculate the number of ratings received by each item
+    item_counts = np.bincount(
+        items.astype(int),
+        minlength=n_items
+    )[:n_items]
+
+    # Calculate the number of ratings submitted by each user
+    user_counts = np.bincount(
+        users.astype(int),
+        minlength=n_users
+    )[:n_users]
+
+    # Identify the most-rated max(1, n_items // 10) items
+    top_n = max(1, n_items // 10)
+
+    # Calculate the proportion of ratings belonging to those items
+    top10pct_share = (
+        float(np.sort(item_counts)[-top_n:].sum() / n_ratings)
+        if n_ratings > 0 else 0.0
+    )
+
+    # Calculate the Gini coefficient of item rating counts
+    item_gini = gini(item_counts)
+
+    # Calculate the median number of ratings per user
+    user_median = (
+        float(np.median(user_counts))
+        if n_users > 0 else 0.0
+    )
+
+    # Count items that have received no ratings
+    items_unrated = int(np.count_nonzero(item_counts == 0))
+
+    # Return all dataset statistics
+    return {
+        "n_ratings": int(n_ratings),
+        "density": round(float(density), 4),
+        "mean": round(mean, 3),
+        "std": round(std, 3),
+        "hist": hist,
+        "top10pct_share": round(top10pct_share, 3),
+        "item_gini": round(float(item_gini), 3),
+        "user_median": user_median,
+        "items_unrated": items_unrated
+    }
+
