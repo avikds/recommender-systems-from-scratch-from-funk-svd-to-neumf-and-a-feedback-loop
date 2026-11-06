@@ -1205,3 +1205,126 @@ def leave_one_out(users, items, n_users, seed):
         test_items
     )
 
+# Step 18 - rank_metrics
+def rank_metrics(scores, train_mask, test_items, k):
+    # Convert inputs to NumPy arrays
+    scores = np.asarray(scores, dtype=float)
+    train_mask = np.asarray(train_mask, dtype=bool)
+    test_items = np.asarray(test_items, dtype=int)
+
+    n_users, n_items = scores.shape
+
+    # Store metrics for users with valid held-out items
+    recalls = []
+    ndcgs = []
+    aucs = []
+
+    # Evaluate each user
+    for u in range(n_users):
+
+        # Skip users without a held-out test item
+        test_item = test_items[u]
+
+        if test_item == -1:
+            continue
+
+        # Identify items not present in the user's training history
+        candidates = np.flatnonzero(~train_mask[u])
+
+        # Number of eligible recommendation candidates
+        n_candidates = len(candidates)
+
+        # Exclude the target item when calculating its rank
+        other_items = candidates[candidates != test_item]
+
+        # Rank of the hidden item:
+        # Count all other items with scores greater than or equal
+        # to the hidden item's score. Ties count against the model.
+        rank = int(
+            np.sum(scores[u, other_items] >= scores[u, test_item])
+        )
+
+        # --------------------------------------------------
+        # 1. Recall@K
+        # --------------------------------------------------
+
+        recall = 1.0 if rank < k else 0.0
+        recalls.append(recall)
+
+        # --------------------------------------------------
+        # 2. NDCG@K
+        # --------------------------------------------------
+
+        ndcg = (
+            1.0 / np.log2(rank + 2)
+            if rank < k else 0.0
+        )
+
+        ndcgs.append(ndcg)
+
+        # --------------------------------------------------
+        # 3. AUC
+        # --------------------------------------------------
+
+        # Guard against division by zero
+        denominator = max(n_candidates - 1, 1)
+
+        auc = 1.0 - rank / denominator
+        aucs.append(auc)
+
+    # Calculate mean metrics across evaluated users
+    if len(recalls) == 0:
+        return {
+            "recall": 0.0,
+            "ndcg": 0.0,
+            "auc": 0.0
+        }
+
+    # Return metrics rounded to four decimal places
+    return {
+        "recall": round(float(np.mean(recalls)), 4),
+        "ndcg": round(float(np.mean(ndcgs)), 4),
+        "auc": round(float(np.mean(aucs)), 4)
+    }
+
+
+def true_value_at_k(scores, train_mask, E, k):
+    # Convert inputs to NumPy arrays
+    scores = np.asarray(scores, dtype=float)
+    train_mask = np.asarray(train_mask, dtype=bool)
+    E = np.asarray(E, dtype=float)
+
+    n_users, n_items = scores.shape
+
+    # Store true expected ratings of recommended items
+    recommended_values = []
+
+    # Process each user
+    for u in range(n_users):
+
+        # Identify items the user has not interacted with
+        candidates = np.flatnonzero(~train_mask[u])
+
+        # Skip users with no available recommendation candidates
+        if len(candidates) == 0 or k <= 0:
+            continue
+
+        # Sort candidate items by descending predicted score.
+        # Stable sorting breaks ties by lower item index.
+        order = np.argsort(
+            -scores[u, candidates],
+            kind="stable"
+        )
+
+        # Select the top-k recommended items
+        top_items = candidates[order[:k]]
+
+        # Collect their true expected ratings
+        recommended_values.extend(E[u, top_items].tolist())
+
+    # Return the mean true expected rating
+    if len(recommended_values) == 0:
+        return 0.0
+
+    return float(np.mean(recommended_values))
+
