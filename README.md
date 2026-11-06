@@ -36,6 +36,7 @@ python scaffold.py
 - [x] **24.** cold_start_split
 - [x] **25.** NeuMF
 - [x] **26.** train_neumf
+- [x] **27.** neumf_ablation
 
 ---
 

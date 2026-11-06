@@ -2352,3 +2352,187 @@ def train_neumf(model, users, items, train_mask,
 
     return losses
 
+# Step 27 - neumf_ablation
+def neumf_ablation(users, items, test_items, world,
+                   n_users, n_items, k, steps, batch,
+                   n_neg, lr, seed, hidden=None):
+
+    # Use the default MLP architecture when hidden is not supplied
+    if hidden is None:
+        hidden = [2 * k, k]
+
+    # Convert inputs to NumPy arrays
+    users = np.asarray(users, dtype=int)
+    items = np.asarray(items, dtype=int)
+    test_items = np.asarray(test_items, dtype=int)
+
+    # Build the training interaction mask
+    _, mask = to_matrix(
+        users,
+        items,
+        1.0,
+        n_users,
+        n_items
+    )
+
+    # Calculate the true expected rating matrix
+    E = expected_ratings(world)
+
+    # Store results for all three model variants
+    results = {}
+
+    # ------------------------------------------
+    # 1. GMF-only model
+    # ------------------------------------------
+
+    gmf_model = NeuMF(
+        n_users,
+        n_items,
+        k,
+        2 * k,
+        hidden,
+        seed,
+        use_mlp=False
+    )
+
+    # Train GMF-only model
+    train_neumf(
+        gmf_model,
+        users,
+        items,
+        mask,
+        steps,
+        batch,
+        n_neg,
+        lr,
+        seed
+    )
+
+    # Generate recommendation scores
+    gmf_scores = gmf_model.score_matrix()
+
+    # Calculate ranking metrics
+    gmf_metrics = rank_metrics(
+        gmf_scores,
+        mask,
+        test_items,
+        10
+    )
+
+    # Add true value at K
+    gmf_metrics["true_value"] = round(
+        true_value_at_k(
+            gmf_scores,
+            mask,
+            E,
+            10
+        ),
+        3
+    )
+
+    results["gmf"] = gmf_metrics
+
+    # ------------------------------------------
+    # 2. MLP-only model
+    # ------------------------------------------
+
+    mlp_model = NeuMF(
+        n_users,
+        n_items,
+        k,
+        2 * k,
+        hidden,
+        seed,
+        use_gmf=False
+    )
+
+    # Train MLP-only model
+    train_neumf(
+        mlp_model,
+        users,
+        items,
+        mask,
+        steps,
+        batch,
+        n_neg,
+        lr,
+        seed
+    )
+
+    # Generate recommendation scores
+    mlp_scores = mlp_model.score_matrix()
+
+    # Calculate ranking metrics
+    mlp_metrics = rank_metrics(
+        mlp_scores,
+        mask,
+        test_items,
+        10
+    )
+
+    # Add true value at K
+    mlp_metrics["true_value"] = round(
+        true_value_at_k(
+            mlp_scores,
+            mask,
+            E,
+            10
+        ),
+        3
+    )
+
+    results["mlp"] = mlp_metrics
+
+    # ------------------------------------------
+    # 3. Full NeuMF model
+    # ------------------------------------------
+
+    neumf_model = NeuMF(
+        n_users,
+        n_items,
+        k,
+        2 * k,
+        hidden,
+        seed
+    )
+
+    # Train the full NeuMF model
+    train_neumf(
+        neumf_model,
+        users,
+        items,
+        mask,
+        steps,
+        batch,
+        n_neg,
+        lr,
+        seed
+    )
+
+    # Generate recommendation scores
+    neumf_scores = neumf_model.score_matrix()
+
+    # Calculate ranking metrics
+    neumf_metrics = rank_metrics(
+        neumf_scores,
+        mask,
+        test_items,
+        10
+    )
+
+    # Add true value at K
+    neumf_metrics["true_value"] = round(
+        true_value_at_k(
+            neumf_scores,
+            mask,
+            E,
+            10
+        ),
+        3
+    )
+
+    results["neumf"] = neumf_metrics
+
+    # Return all three model evaluations
+    return results
+
