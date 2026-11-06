@@ -1859,3 +1859,43 @@ def fit_fm(idx, val, y, D, k, lr, lam, epochs, batch, seed):
 
     return params
 
+# Step 24 - cold_start_split
+def cold_start_split(users, items, ratings, n_items, frac, seed):
+    # Convert inputs to NumPy arrays
+    users = np.asarray(users, dtype=int)
+    items = np.asarray(items, dtype=int)
+    ratings = np.asarray(ratings, dtype=float)
+
+    # Create a reproducible random number generator
+    rng = np.random.default_rng(seed)
+
+    # Determine the number of cold-start items
+    n_cold = int(frac * n_items)
+
+    # Randomly select the cold-start item indices
+    cold_items = rng.permutation(n_items)[:n_cold]
+
+    # Create a Boolean mask identifying cold-start items
+    is_cold = np.zeros(n_items, dtype=bool)
+    is_cold[cold_items] = True
+
+    # Identify observed rows belonging to cold and warm items
+    cold_rows_mask = is_cold[items]
+    warm_rows_mask = ~cold_rows_mask
+
+    # Separate warm-item observations, preserving original order
+    warm = (
+        users[warm_rows_mask],
+        items[warm_rows_mask],
+        ratings[warm_rows_mask]
+    )
+
+    # Separate cold-item observations, preserving original order
+    cold_rows = (
+        users[cold_rows_mask],
+        items[cold_rows_mask],
+        ratings[cold_rows_mask]
+    )
+
+    return warm, cold_rows, is_cold
+
