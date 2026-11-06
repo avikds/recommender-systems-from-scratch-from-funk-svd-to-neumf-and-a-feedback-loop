@@ -17,6 +17,7 @@ python scaffold.py
 - [x] **5.** fit_biases
 - [x] **6.** similarity_matrix
 - [x] **7.** knn_predict
+- [x] **8.** svd_complete
 
 ---
 

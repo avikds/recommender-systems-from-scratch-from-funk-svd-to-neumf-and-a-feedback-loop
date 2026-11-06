@@ -419,3 +419,21 @@ def knn_predict(S, E, mask, rows, cols, k, fallback=0.0):
     # Return predictions as a floating-point NumPy array
     return predictions
 
+# Step 8 - svd_complete
+def svd_complete(R, k):
+    # Convert the input matrix to a floating-point NumPy array
+    R = np.asarray(R, dtype=float)
+
+    # Compute the thin Singular Value Decomposition
+    U, s, Vt = np.linalg.svd(R, full_matrices=False)
+
+    # Retain the k largest singular values and corresponding vectors
+    U_k = U[:, :k]
+    s_k = s[:k]
+    Vt_k = Vt[:k, :]
+
+    # Reconstruct the rank-k approximation
+    R_k = (U_k * s_k) @ Vt_k
+
+    return R_k
+
