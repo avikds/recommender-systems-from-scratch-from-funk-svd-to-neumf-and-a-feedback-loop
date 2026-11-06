@@ -2153,52 +2153,60 @@ class NeuMF:
         return scores
 
 # Step 26 - train_neumf
-# ── Step 026  train_neumf ──
 def train_neumf(model, users, items, train_mask,
                 steps, batch, n_neg, lr, seed):
 
+    # Convert inputs
     users = np.asarray(users, dtype=int)
     items = np.asarray(items, dtype=int)
     train_mask = np.asarray(train_mask, dtype=bool)
 
+    # Validate inputs
     if len(users) == 0:
         raise ValueError("Training interactions cannot be empty.")
+
     if len(users) != len(items):
         raise ValueError("users and items must have equal lengths.")
+
     if train_mask.ndim != 2:
         raise ValueError("train_mask must be two-dimensional.")
+
     if batch <= 0 or n_neg <= 0:
         raise ValueError("batch and n_neg must be positive.")
+
     if steps < 0:
         raise ValueError("steps must be non-negative.")
+
     if np.any(users < 0) or np.any(users >= train_mask.shape[0]):
         raise ValueError("Invalid user index.")
+
     if np.any(items < 0) or np.any(items >= train_mask.shape[1]):
         raise ValueError("Invalid item index.")
-    if np.any(train_mask[users, items] == False):
-        raise ValueError("Training interactions must be marked in train_mask.")
 
-    # Reproducible negative and positive sampling
+    # Reproducible random generator
     rng = np.random.default_rng([seed, 7])
 
     params = model.parameters()
+
     n_items = train_mask.shape[1]
 
-    # Adam hyperparameters and NumPy optimizer state
+    # Adam hyperparameters
     beta1 = 0.9
     beta2 = 0.999
     eps = 1e-8
 
+    # Initialize Adam moment estimates
     m = [
         np.zeros_like(p.numpy(), dtype=np.float32)
         for p in params
     ]
+
     v = [
         np.zeros_like(p.numpy(), dtype=np.float32)
         for p in params
     ]
 
-    # Fixed labels: positives first, followed by negatives
+    # Fixed labels: positives followed by negatives
     labels = np.concatenate([
         np.ones(batch, dtype=np.float32),
         np.zeros(batch * n_neg, dtype=np.float32)
@@ -2212,18 +2220,22 @@ def train_neumf(model, users, items, train_mask,
 
         for step in range(1, steps + 1):
 
-            # --------------------------------------------------
+            # ------------------------------------------
             # 1. Sample positive interactions
-            # --------------------------------------------------
+            # ------------------------------------------
 
-            t = rng.integers(0, len(users), size=batch)
+            t = rng.integers(
+                0,
+                len(users),
+                size=batch
+            )
 
             up = users[t]
             ip = items[t]
 
-            # --------------------------------------------------
-            # 2. Sample negative items not in training history
-            # --------------------------------------------------
+            # ------------------------------------------
+            # 2. Sample negative interactions
+            # ------------------------------------------
 
             un = np.repeat(up, n_neg)
 
@@ -2233,19 +2245,22 @@ def train_neumf(model, users, items, train_mask,
                 size=len(un)
             )
 
+            # Resample observed interactions
             bad = train_mask[un, jn]
 
             while np.any(bad):
+
                 jn[bad] = rng.integers(
                     0,
                     n_items,
                     size=int(np.sum(bad))
                 )
+
                 bad = train_mask[un, jn]
 
-            # --------------------------------------------------
-            # 3. Construct the training batch
-            # --------------------------------------------------
+            # ------------------------------------------
+            # 3. Construct training batch
+            # ------------------------------------------
 
             batch_users = np.concatenate([
                 up,
@@ -2260,9 +2275,9 @@ def train_neumf(model, users, items, train_mask,
             u_tensor = Tensor(batch_users)
             i_tensor = Tensor(batch_items)
 
-            # --------------------------------------------------
+            # ------------------------------------------
             # 4. Forward pass and backpropagation
-            # --------------------------------------------------
+            # ------------------------------------------
 
             for p in params:
                 p.grad = None
@@ -2273,26 +2288,35 @@ def train_neumf(model, users, items, train_mask,
 
             loss.backward()
 
-            # Record loss before changing the parameters
+            # Record loss before updating parameters
             losses.append(float(loss.item()))
 
-            # --------------------------------------------------
-            # 5. Extract gradients before updating parameters
-            # --------------------------------------------------
+            # ------------------------------------------
+            # 5. Extract gradients
+            # ------------------------------------------
 
             grads = []
 
             for p in params:
+
                 if p.grad is None:
-                    grads.append(np.zeros_like(p.numpy()))
-                else:
+
                     grads.append(
-                        p.grad.numpy().astype(np.float32, copy=True)
+                        np.zeros_like(p.numpy(), dtype=np.float32)
                     )
 
-            # --------------------------------------------------
-            # 6. Perform Adam updates individually
-            # --------------------------------------------------
+                else:
+
+                    grads.append(
+                        p.grad.numpy().astype(
+                            np.float32,
+                            copy=True
+                        )
+                    )
+
+            # ------------------------------------------
+            # 6. Apply Adam updates
+            # ------------------------------------------
 
             for idx, (p, grad) in enumerate(zip(params, grads)):
 
@@ -2310,15 +2334,16 @@ def train_neumf(model, users, items, train_mask,
 
                 # Bias correction
                 m_hat = m[idx] / (1.0 - beta1 ** step)
+
                 v_hat = v[idx] / (1.0 - beta2 ** step)
 
-                # Calculate updated parameter values in NumPy
+                # Parameter update
                 updated = (
                     p.numpy()
                     - lr * m_hat / (np.sqrt(v_hat) + eps)
                 )
 
-                # Assign and realize one parameter at a time
+                # Assign updated parameter
                 p.assign(
                     Tensor(
                         updated.astype(np.float32)
