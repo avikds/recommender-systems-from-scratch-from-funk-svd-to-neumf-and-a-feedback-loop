@@ -25,6 +25,7 @@ python scaffold.py
 - [x] **13.** subspace_cosines
 - [x] **14.** offline_vs_truth
 - [x] **15.** autorec_loss_grads
+- [x] **16.** fit_autorec
 
 ---
 

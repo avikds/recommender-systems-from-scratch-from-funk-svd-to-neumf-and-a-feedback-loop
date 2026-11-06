@@ -1007,3 +1007,137 @@ def autorec_loss_grads(Y, mask, V, mu, W, b, lam):
 
     return float(loss), grads
 
+# Step 16 - fit_autorec
+def adam_update(params, grads, state, lr, b1=0.9, b2=0.999, eps=1e-8):
+    # Initialize and increment the optimization step counter
+    state["t"] = state.get("t", 0) + 1
+    t = state["t"]
+
+    # Initialize first and second moment dictionaries
+    if "m" not in state:
+        state["m"] = {}
+
+    if "v" not in state:
+        state["v"] = {}
+
+    # Update every parameter using Adam
+    for key in params:
+        # Retrieve the current parameter and its gradient
+        param = params[key]
+        grad = grads[key]
+
+        # Initialize moment estimates for this parameter
+        if key not in state["m"]:
+            state["m"][key] = np.zeros_like(param)
+
+        if key not in state["v"]:
+            state["v"][key] = np.zeros_like(param)
+
+        # Update first moment estimate
+        state["m"][key] = (
+            b1 * state["m"][key]
+            + (1.0 - b1) * grad
+        )
+
+        # Update second moment estimate
+        state["v"][key] = (
+            b2 * state["v"][key]
+            + (1.0 - b2) * (grad ** 2)
+        )
+
+        # Apply bias correction
+        m_hat = state["m"][key] / (1.0 - b1 ** t)
+        v_hat = state["v"][key] / (1.0 - b2 ** t)
+
+        # Update parameters in place
+        params[key][...] -= (
+            lr * m_hat / (np.sqrt(v_hat) + eps)
+        )
+
+
+def fit_autorec(R, mask, k, lam, lr, steps, seed):
+    # Convert inputs to NumPy arrays
+    R = np.asarray(R, dtype=float)
+    mask = np.asarray(mask, dtype=bool)
+
+    # Create an independent random number generator
+    rng = np.random.default_rng([seed, 3])
+
+    # Determine the global mean of observed ratings
+    r0 = float(R[mask].mean())
+
+    # Center observed ratings around the global mean
+    # Unknown entries are represented as zero
+    Y = (R - r0) * mask
+
+    # Convert the observation mask to floating-point form
+    m = mask.astype(float)
+
+    # Get the number of rows and input dimensions
+    n, d = Y.shape
+
+    # Initialize encoder weights
+    V = rng.normal(0.0, 0.02, size=(k, d))
+
+    # Initialize hidden-layer bias
+    mu = np.zeros(k)
+
+    # Initialize decoder weights
+    W = rng.normal(0.0, 0.02, size=(k, d))
+
+    # Initialize output bias
+    b = np.zeros(d)
+
+    # Store all trainable parameters
+    params = {
+        "V": V,
+        "mu": mu,
+        "W": W,
+        "b": b
+    }
+
+    # Initialize Adam optimizer state
+    state = {}
+
+    # --------------------------------------------------
+    # Train AutoRec using full-batch Adam
+    # --------------------------------------------------
+
+    for _ in range(steps):
+
+        # Calculate masked loss and parameter gradients
+        loss, grads = autorec_loss_grads(
+            Y, m, 
+            params["V"],
+            params["mu"],
+            params["W"],
+            params["b"],
+            lam
+        )
+
+        # Perform one Adam update
+        adam_update(
+            params,
+            grads,
+            state,
+            lr
+        )
+
+    # --------------------------------------------------
+    # Generate the completed rating matrix
+    # --------------------------------------------------
+
+    # Run the forward pass using the trained parameters
+    out, H = autorec_forward(
+        Y,
+        params["V"],
+        params["mu"],
+        params["W"],
+        params["b"]
+    )
+
+    # Restore the global rating mean
+    completed_matrix = out + r0
+
+    return completed_matrix, params
+
