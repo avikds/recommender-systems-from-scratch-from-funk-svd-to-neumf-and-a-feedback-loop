@@ -1900,7 +1900,6 @@ def cold_start_split(users, items, ratings, n_items, frac, seed):
     return warm, cold_rows, is_cold
 
 # Step 25 - NeuMF
-# ── Step 025  NeuMF ──
 from tinygrad import Tensor, TinyJit
 from tinygrad.nn.optim import Adam
 
