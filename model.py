@@ -68,3 +68,51 @@ def expected_ratings(world):
         + world["U"] @ world["V"].T
     )
 
+# Step 2 - sample_ratings
+def exposure_logits(world, beta):
+    # Compute the user-item interaction matrix
+    A = world["U"] @ world["V"].T
+
+    # Calculate exposure logits using user activity,
+    # item popularity, and user-item preferences
+    return (
+        world["log_act"][:, None]
+        + world["log_pop"][None, :]
+        + beta * A / A.std()
+    )
+
+
+def sample_ratings(world, n_obs, beta, noise, seed):
+    # Create an independent random number generator
+    rng = np.random.default_rng([seed, 0])
+
+    n_users = world["U"].shape[0]
+    n_items = world["V"].shape[0]
+
+    # Generate Gumbel keys for every user-item pair
+    keys = (
+        exposure_logits(world, beta)
+        + rng.gumbel(size=(n_users, n_items))
+    )
+
+    # Select the n_obs pairs with the largest keys
+    flat = np.argsort(-keys, axis=None)[:n_obs]
+
+    # Sort selected pairs by their flat indices
+    # and convert them back into user and item indices
+    users, items = np.unravel_index(
+        np.sort(flat),
+        keys.shape
+    )
+
+    # Generate noisy ratings using the true expected ratings
+    y = (
+        expected_ratings(world)[users, items]
+        + rng.normal(0.0, noise, size=n_obs)
+    )
+
+    # Round ratings and clip them to the range [1, 5]
+    ratings = np.clip(np.round(y), 1.0, 5.0)
+
+    return users, items, ratings
+

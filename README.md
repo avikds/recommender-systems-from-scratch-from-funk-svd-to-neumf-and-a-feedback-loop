@@ -11,6 +11,7 @@ python scaffold.py
 ## Steps
 
 - [x] **1.** make_world
+- [x] **2.** sample_ratings
 
 ---
 
