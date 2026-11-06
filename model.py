@@ -516,3 +516,88 @@ def funk_sgd_step(params, u, i, y, lr, lam):
     # Return the prediction error calculated before the updates
     return e_ui
 
+# Step 10 - fit_funk_svd
+def fit_funk_svd(users, items, ratings, n_users, n_items, k, lr, lam, epochs, seed, valid=None, patience=12):
+
+    # Initialize model parameters
+    params = init_params(ratings, n_users, n_items, k, seed)
+
+    # Create an independent random number generator for epoch shuffling
+    rng = np.random.default_rng([seed, 2])
+
+    # Initialize validation history and early stopping variables
+    history = []
+    best_params = None
+    best_rmse = np.inf
+    patience_counter = 0
+
+    # Convert training data into NumPy arrays
+    users = np.asarray(users, dtype=int)
+    items = np.asarray(items, dtype=int)
+    ratings = np.asarray(ratings, dtype=float)
+
+    # Train the model for the specified number of epochs
+    for epoch in range(epochs):
+
+        # Randomly shuffle the training observations
+        permutation = rng.permutation(len(ratings))
+
+        # Perform one SGD update for every observed rating
+        for idx in permutation:
+            funk_sgd_step(
+                params,
+                users[idx],
+                items[idx],
+                ratings[idx],
+                lr,
+                lam
+            )
+
+        # Perform validation if a validation set is provided
+        if valid is not None:
+            users_v, items_v, ratings_v = valid
+
+            # Predict ratings on the validation set
+            predictions = mf_predict(
+                params,
+                users_v,
+                items_v
+            )
+
+            # Calculate validation RMSE
+            current_rmse = rmse(ratings_v, predictions)
+
+            # Append the current validation RMSE to history
+            history.append(float(current_rmse))
+
+            # Check whether the validation RMSE has improved
+            if current_rmse < best_rmse:
+
+                # Save the new best validation RMSE
+                best_rmse = current_rmse
+
+                # Save an independent copy of the best parameters
+                best_params = {
+                    key: value.copy()
+                    if isinstance(value, np.ndarray)
+                    else value
+                    for key, value in params.items()
+                }
+
+                # Reset the early stopping counter
+                patience_counter = 0
+
+            else:
+                # Increment the counter when validation does not improve
+                patience_counter += 1
+
+                # Stop training when patience is exhausted
+                if patience_counter >= patience:
+                    break
+
+    # If validation was not provided, return the final trained parameters
+    if valid is None:
+        best_params = params
+
+    return best_params, history
+

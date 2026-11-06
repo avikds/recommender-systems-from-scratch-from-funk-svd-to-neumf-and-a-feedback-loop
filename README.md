@@ -19,6 +19,7 @@ python scaffold.py
 - [x] **7.** knn_predict
 - [x] **8.** svd_complete
 - [x] **9.** funk_sgd_step
+- [x] **10.** fit_funk_svd
 
 ---
 
