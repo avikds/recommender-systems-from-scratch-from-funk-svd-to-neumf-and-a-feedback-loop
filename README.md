@@ -20,6 +20,7 @@ python scaffold.py
 - [x] **8.** svd_complete
 - [x] **9.** funk_sgd_step
 - [x] **10.** fit_funk_svd
+- [x] **11.** als_biased
 
 ---
 

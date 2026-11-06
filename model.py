@@ -601,3 +601,165 @@ def fit_funk_svd(users, items, ratings, n_users, n_items, k, lr, lam, epochs, se
 
     return best_params, history
 
+# Step 11 - als_biased
+def ridge_side(T, m, X, lam_vec):
+    # Convert inputs to floating-point NumPy arrays
+    T = np.asarray(T, dtype=float)
+    m = np.asarray(m, dtype=float)
+    X = np.asarray(X, dtype=float)
+    lam_vec = np.asarray(lam_vec, dtype=float)
+
+    # Number of rows and feature dimensions
+    n_rows, n_cols = T.shape
+    d = X.shape[1]
+
+    # Construct the ridge regression matrices for all rows simultaneously
+    # A[r] = X.T @ diag(m[r]) @ X + diag(lam_vec)
+    A = np.einsum(
+        'rj,jd,je->rde',
+        m, X, X
+    )
+
+    # Add regularization to the diagonal of every A matrix
+    A += np.diag(lam_vec)[None, :, :]
+
+    # Construct the right-hand side for every row
+    # rhs[r] = sum_j m[r,j] * T[r,j] * X[j]
+    rhs = np.einsum(
+        'rj,rj,jd->rd',
+        m, T, X
+    )
+
+    # Solve all ridge regression systems simultaneously
+    theta = np.linalg.solve(
+        A,
+        rhs[:, :, None]
+    )[:, :, 0]
+
+    return theta, A
+
+
+def als_sweep(T, m, U, V, lam_vec):
+    # Convert inputs to NumPy arrays
+    T = np.asarray(T, dtype=float)
+    m = np.asarray(m, dtype=float)
+    U = np.asarray(U, dtype=float)
+    V = np.asarray(V, dtype=float)
+    lam_vec = np.asarray(lam_vec, dtype=float)
+
+    # --------------------------------------------------
+    # 1. Update user parameters while keeping item
+    #    parameters fixed
+    # --------------------------------------------------
+
+    # Construct item feature vectors with a bias column
+    X_users = np.column_stack((
+        np.ones(V.shape[0]),
+        V[:, 1:]
+    ))
+
+    # Remove the current item bias from the targets
+    targets_users = T - V[:, 0][None, :] * m
+
+    # Solve the user-side ridge regression problems
+    U_new, A_u = ridge_side(
+        targets_users,
+        m,
+        X_users,
+        lam_vec
+    )
+
+    # --------------------------------------------------
+    # 2. Update item parameters using the newly updated
+    #    user parameters
+    # --------------------------------------------------
+
+    # Construct user feature vectors with a bias column
+    X_items = np.column_stack((
+        np.ones(U_new.shape[0]),
+        U_new[:, 1:]
+    ))
+
+    # Remove the newly updated user bias from the targets
+    targets_items = (
+        T.T - U_new[:, 0][None, :] * m.T
+    )
+
+    # Solve the item-side ridge regression problems
+    V_new, A_v = ridge_side(
+        targets_items,
+        m.T,
+        X_items,
+        lam_vec
+    )
+
+    return U_new, V_new, A_u, A_v
+
+
+def als_biased(users, items, ratings, n_users, n_items,
+               k, lam_b, lam_f, sweeps, seed):
+
+    # Initialize model parameters using the existing function
+    params = init_params(
+        ratings,
+        n_users,
+        n_items,
+        k,
+        seed
+    )
+
+    # Construct the user-item rating matrix and observation mask
+    R, mask = to_matrix(
+        users,
+        items,
+        ratings,
+        n_users,
+        n_items
+    )
+
+    # Convert the observation mask to floating-point form
+    m = mask.astype(float)
+
+    # Subtract the global mean from observed ratings
+    # Missing entries remain zero
+    T = R - params["mu"] * m
+
+    # Combine bias and latent factors into augmented matrices
+    # First column represents the corresponding bias
+    U = np.column_stack((
+        params["b"],
+        params["U"]
+    ))
+
+    V = np.column_stack((
+        params["c"],
+        params["V"]
+    ))
+
+    # Set regularization:
+    # lam_b for biases and lam_f for latent factors
+    lam_vec = np.r_[
+        lam_b,
+        np.full(k, lam_f)
+    ]
+
+    # Perform alternating least squares sweeps
+    for _ in range(sweeps):
+        U, V, A_u, A_v = als_sweep(
+            T,
+            m,
+            U,
+            V,
+            lam_vec
+        )
+
+    # Update the parameter dictionary
+    params["b"] = U[:, 0].copy()
+    params["U"] = U[:, 1:].copy()
+
+    params["c"] = V[:, 0].copy()
+    params["V"] = V[:, 1:].copy()
+
+    # Return parameters in the same format as init_params
+    return params
+
