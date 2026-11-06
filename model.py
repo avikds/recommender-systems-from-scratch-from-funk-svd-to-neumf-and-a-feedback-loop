@@ -1916,8 +1916,7 @@ class NeuMF:
         def to_tensor(a):
             return (
                 Tensor(
-                    np.asarray(a, dtype=np.float32),
-                    requires_grad=True
+                    np.asarray(a, dtype=np.float32)
                 )
                 .contiguous()
                 .realize()
