@@ -116,3 +116,50 @@ def sample_ratings(world, n_obs, beta, noise, seed):
 
     return users, items, ratings
 
+# Step 3 - split_per_user
+def split_per_user(users, items, ratings, test_frac, seed):
+    # Create a reproducible random number generator
+    rng = np.random.default_rng(seed)
+
+    n = len(users)
+
+    # Generate a random permutation of the input row indices
+    perm = rng.permutation(n)
+
+    # Group rows by user while preserving their permutation order
+    grouped = perm[
+        np.argsort(users[perm], kind="stable")
+    ]
+
+    # Identify the boundaries of each user's group
+    grouped_users = users[grouped]
+
+    boundaries = np.concatenate((
+        [0],
+        np.flatnonzero(grouped_users[1:] != grouped_users[:-1]) + 1,
+        [n]
+    ))
+
+    # Mark the rows assigned to the test set
+    test_mask = np.zeros(n, dtype=bool)
+
+    for start, end in zip(boundaries[:-1], boundaries[1:]):
+        # Get the permuted rows belonging to the current user
+        group = grouped[start:end]
+
+        # Determine how many ratings this user contributes to the test set
+        n_test = int(test_frac * len(group))
+
+        # Assign the first n_test rows to the test set
+        test_mask[group[:n_test]] = True
+
+    # Recover original input order for both training and testing indices
+    train_idx = np.flatnonzero(~test_mask)
+    test_idx = np.flatnonzero(test_mask)
+
+    # Return training and testing data, preserving original row order
+    return (
+        (users[train_idx], items[train_idx], ratings[train_idx]),
+        (users[test_idx], items[test_idx], ratings[test_idx])
+    )
+

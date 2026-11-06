@@ -12,6 +12,7 @@ python scaffold.py
 
 - [x] **1.** make_world
 - [x] **2.** sample_ratings
+- [x] **3.** split_per_user
 
 ---
 
