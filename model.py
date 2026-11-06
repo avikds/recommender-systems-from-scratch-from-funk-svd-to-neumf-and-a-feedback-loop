@@ -763,3 +763,55 @@ def als_biased(users, items, ratings, n_users, n_items,
     # Return parameters in the same format as init_params
     return params
 
+# Step 12 - pmf_objective
+def pmf_objective(params, users, items, ratings, lam_b, lam_f):
+    # Convert inputs to NumPy arrays
+    users = np.asarray(users, dtype=int)
+    items = np.asarray(items, dtype=int)
+    ratings = np.asarray(ratings, dtype=float)
+
+    # Predict ratings using the existing matrix factorization function
+    predictions = mf_predict(params, users, items)
+
+    # Calculate the sum of squared prediction errors
+    squared_error = np.sum((ratings - predictions) ** 2)
+
+    # Calculate the regularization penalty for user and item biases
+    bias_penalty = lam_b * (
+        np.sum(params["b"] ** 2)
+        + np.sum(params["c"] ** 2)
+    )
+
+    # Calculate the regularization penalty for latent factors
+    factor_penalty = lam_f * (
+        np.sum(params["U"] ** 2)
+        + np.sum(params["V"] ** 2)
+    )
+
+    # Calculate the complete PMF objective
+    objective = squared_error + bias_penalty + factor_penalty
+
+    return float(objective)
+
+
+def implied_lambdas(world, noise):
+    # Effective observation noise variance.
+    # The additional 1/12 accounts for rounding ratings to integers.
+    sigma2 = noise ** 2 + 1.0 / 12.0
+
+    # Calculate the regularization coefficient for user biases
+    lam_user_bias = sigma2 / np.var(world["b"])
+
+    # Calculate the regularization coefficient for item biases
+    lam_item_bias = sigma2 / np.var(world["c"])
+
+    # Calculate one regularization coefficient per latent factor column
+    lam_factor = sigma2 / np.var(world["U"], axis=0)
+
+    # Return the implied regularization coefficients
+    return {
+        "lam_user_bias": float(lam_user_bias),
+        "lam_item_bias": float(lam_item_bias),
+        "lam_factor": [float(x) for x in lam_factor]
+    }
+
