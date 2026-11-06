@@ -1737,3 +1737,125 @@ def fm_forward(idx, val, mu, w, V):
 
     return pred, s
 
+# Step 23 - fit_fm
+def fm_step(idx, val, y, params, lr, lam):
+    # Convert inputs to NumPy arrays
+    idx = np.asarray(idx, dtype=int)
+    val = np.asarray(val, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    # Save the original parameter values
+    # All gradients must use values from the start of this call
+    old_w = params["w"].copy()
+    old_V = params["V"].copy()
+
+    # --------------------------------------------------
+    # 1. Forward pass
+    # --------------------------------------------------
+
+    # Calculate predictions and latent interaction sums
+    pred, s = fm_forward(
+        idx,
+        val,
+        params["mu"],
+        old_w,
+        old_V
+    )
+
+    # Calculate prediction errors
+    err = y - pred
+
+    # --------------------------------------------------
+    # 2. Calculate gradients
+    # --------------------------------------------------
+
+    # Retrieve latent factors for each active feature
+    V_x = old_V[idx]
+
+    # Calculate the gradient of the prediction
+    # with respect to each linear feature weight
+    grad_w = (
+        err[:, None] * val
+        - lam * old_w[idx]
+    )
+
+    # Calculate the gradient of the prediction
+    # with respect to each latent factor
+    grad_V = (
+        err[:, None, None]
+        * (
+            val[:, :, None] * s[:, None, :]
+            - V_x * val[:, :, None] ** 2
+        )
+        - lam * V_x
+    )
+
+    # --------------------------------------------------
+    # 3. Update parameters
+    # --------------------------------------------------
+
+    # Only nonzero feature values contribute updates
+    active = val != 0
+
+    # Accumulate linear weight updates.
+    # np.add.at handles repeated feature indices correctly.
+    np.add.at(
+        params["w"],
+        idx[active],
+        lr * grad_w[active]
+    )
+
+    # Accumulate latent factor updates
+    np.add.at(
+        params["V"],
+        idx[active],
+        lr * grad_V[active]
+    )
+
+    # Calculate and return the mean squared error
+    return float(np.mean(err ** 2))
+
+
+def fit_fm(idx, val, y, D, k, lr, lam, epochs, batch, seed):
+    # Convert inputs to NumPy arrays
+    idx = np.asarray(idx, dtype=int)
+    val = np.asarray(val, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    # Create an independent seeded random generator
+    rng = np.random.default_rng([seed, 5])
+
+    # Initialize the Factorization Machine parameters
+    params = {
+        "mu": float(y.mean()),
+        "w": np.zeros(D),
+        "V": rng.normal(0.0, 0.05, size=(D, k))
+    }
+
+    # --------------------------------------------------
+    # Train using shuffled minibatches
+    # --------------------------------------------------
+
+    for _ in range(epochs):
+
+        # Randomly shuffle the training observations
+        perm = rng.permutation(len(y))
+
+        # Process consecutive minibatches
+        for start in range(0, len(y), batch):
+
+            # Select the current minibatch indices
+            batch_idx = perm[start:start + batch]
+
+            # Perform one Factorization Machine SGD update
+            fm_step(
+                idx[batch_idx],
+                val[batch_idx],
+                y[batch_idx],
+                params,
+                lr,
+                lam
+            )
+
+    return params
+

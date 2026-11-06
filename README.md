@@ -32,6 +32,7 @@ python scaffold.py
 - [x] **20.** ranking_step
 - [x] **21.** fit_implicit_mf
 - [x] **22.** fm_forward
+- [x] **23.** fit_fm
 
 ---
 
