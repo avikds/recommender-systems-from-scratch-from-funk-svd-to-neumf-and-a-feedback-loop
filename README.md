@@ -18,6 +18,7 @@ python scaffold.py
 - [x] **6.** similarity_matrix
 - [x] **7.** knn_predict
 - [x] **8.** svd_complete
+- [x] **9.** funk_sgd_step
 
 ---
 

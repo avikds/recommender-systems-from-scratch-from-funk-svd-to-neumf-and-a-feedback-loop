@@ -437,3 +437,82 @@ def svd_complete(R, k):
 
     return R_k
 
+# Step 9 - funk_sgd_step
+def init_params(ratings, n_users, n_items, k, seed):
+    # Create an independent random number generator
+    rng = np.random.default_rng([seed, 1])
+
+    # Initialize the global mean rating
+    mu = float(ratings.mean())
+
+    # Initialize user and item biases to zero
+    b = np.zeros(n_users)
+    c = np.zeros(n_items)
+
+    # Initialize user and item latent factor matrices
+    U = rng.normal(0.0, 0.1, size=(n_users, k))
+    V = rng.normal(0.0, 0.1, size=(n_items, k))
+
+    return {
+        "mu": mu,
+        "b": b,
+        "c": c,
+        "U": U,
+        "V": V
+    }
+
+
+def mf_predict(params, users, items):
+    # Convert user and item indices to NumPy arrays
+    users = np.asarray(users, dtype=int)
+    items = np.asarray(items, dtype=int)
+
+    # Predict ratings using the biased matrix factorization model
+    predictions = (
+        params["mu"]
+        + params["b"][users]
+        + params["c"][items]
+        + np.sum(
+            params["U"][users] * params["V"][items],
+            axis=-1
+        )
+    )
+
+    return predictions
+
+
+def funk_sgd_step(params, u, i, y, lr, lam):
+    # Calculate prediction error using the current parameters
+    e_ui = float(y - mf_predict(params, u, i))
+
+    # Save old bias values
+    old_b = params["b"][u]
+    old_c = params["c"][i]
+
+    # Save copies of old latent factor vectors
+    old_u = params["U"][u].copy()
+    old_v = params["V"][i].copy()
+
+    # Update user bias using its old value
+    params["b"][u] = (
+        old_b + lr * (e_ui - lam * old_b)
+    )
+
+    # Update item bias using its old value
+    params["c"][i] = (
+        old_c + lr * (e_ui - lam * old_c)
+    )
+
+    # Update user latent factors using the old item factors
+    params["U"][u] = (
+        old_u + lr * (e_ui * old_v - lam * old_u)
+    )
+
+    # Update item latent factors using the old user factors
+    params["V"][i] = (
+        old_v + lr * (e_ui * old_u - lam * old_v)
+    )
+
+    # Return the prediction error calculated before the updates
+    return e_ui
+
