@@ -1328,3 +1328,78 @@ def true_value_at_k(scores, train_mask, E, k):
 
     return float(np.mean(recommended_values))
 
+# Step 19 - sample_triples
+def preference_matrix(positives, n_items):
+    # Convert positive item indices into a set for efficient lookup
+    positives = set(positives)
+
+    # Initialize the preference matrix
+    P = []
+
+    # Construct each row of the preference matrix
+    for i in range(n_items):
+        row = []
+
+        for j in range(n_items):
+
+            # An item cannot be compared with itself
+            if i == j:
+                value = "."
+
+            # j is positive and i is not
+            # The user prefers j over i
+            elif j in positives and i not in positives:
+                value = "+"
+
+            # i is positive and j is not
+            # The user prefers i over j
+            elif i in positives and j not in positives:
+                value = "-"
+
+            # No preference can be established
+            else:
+                value = "?"
+
+            row.append(value)
+
+        P.append(row)
+
+    return P
+
+
+def sample_triples(train_mask, users, items, n, rng):
+    # Convert inputs to NumPy arrays
+    train_mask = np.asarray(train_mask, dtype=bool)
+    users = np.asarray(users, dtype=int)
+    items = np.asarray(items, dtype=int)
+
+    # Determine the number of items
+    n_items = train_mask.shape[1]
+
+    # 1. Randomly sample positive user-item interactions
+    t = rng.integers(0, len(users), size=n)
+
+    u = users[t]
+    i = items[t]
+
+    # 2. Initially sample random negative items
+    j = rng.integers(0, n_items, size=n)
+
+    # 3. Reject negative samples that are already in the
+    # user's training interaction history
+    bad = train_mask[u, j]
+
+    while np.any(bad):
+        # Redraw only the invalid negative item positions
+        j[bad] = rng.integers(
+            0,
+            n_items,
+            size=int(np.sum(bad))
+        )
+
+        # Check which sampled negatives are still invalid
+        bad = train_mask[u, j]
+
+    # Return user, positive item, and negative item triples
+    return u, i, j
+

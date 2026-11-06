@@ -28,6 +28,7 @@ python scaffold.py
 - [x] **16.** fit_autorec
 - [x] **17.** leave_one_out
 - [x] **18.** rank_metrics
+- [x] **19.** sample_triples
 
 ---
 
