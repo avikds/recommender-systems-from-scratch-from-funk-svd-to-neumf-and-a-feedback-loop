@@ -39,6 +39,7 @@ python scaffold.py
 - [x] **27.** neumf_ablation
 - [x] **28.** predictive_variance
 - [x] **29.** run_feedback_loop
+- [x] **30.** recsys_report
 
 ---
 

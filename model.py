@@ -2921,3 +2921,948 @@ def run_feedback_loop(world, policy, rounds, init_obs, beta, noise,
         "pop_share": pop_share
     }
 
+# Step 30 - recsys_report
+def recsys_report(seed=0, n_users=1500, n_items=1000, k=5,
+                  density=0.0447, noise=0.72, beta=1.0,
+                  funk_epochs=60, autorec_steps=40,
+                  implicit_updates=6000, fm_epochs=30,
+                  neumf_steps=1000, rounds=30, init_obs=3000,
+                  betas=(0.0, 0.5, 1.0, 1.5)):
+
+    # ==========================================
+    # 1. Generate world and data
+    # ==========================================
+
+    world = make_world(
+        n_users,
+        n_items,
+        k,
+        seed
+    )
+
+    # Common initialization seed for fitted models
+    init = seed + 1000
+
+    n_obs = int(
+        density * n_users * n_items
+    )
+
+    # Generate observations
+    users, items, ratings = sample_ratings(
+        world,
+        n_obs,
+        beta,
+        noise,
+        seed + 1
+    )
+
+    # Train/test split
+    train, test = split_per_user(
+        users,
+        items,
+        ratings,
+        0.1,
+        seed + 2
+    )
+
+    # Fit/validation split
+    fit, valid = split_per_user(
+        *train,
+        0.1,
+        seed + 3
+    )
+
+    fu, fi, fr = fit
+    vu, vi, vr = valid
+    tu, ti, tr = test
+
+    E = expected_ratings(world)
+
+    # ==========================================
+    # 2. Dataset statistics
+    # ==========================================
+
+    stats = dataset_stats(
+        users,
+        items,
+        ratings,
+        n_users,
+        n_items
+    )
+
+    R, mask = to_matrix(
+        fu,
+        fi,
+        fr,
+        n_users,
+        n_items
+    )
+
+    def safe_rmse(actual, predicted):
+
+        actual = np.asarray(actual, dtype=float)
+        predicted = np.asarray(predicted, dtype=float)
+
+        if len(actual) == 0:
+            return 0.0
+
+        return rmse(actual, predicted)
+
+    # ==========================================
+    # 3. Explicit rating prediction ladder
+    # ==========================================
+
+    ladder = {}
+
+    # Oracle
+    ladder["oracle"] = safe_rmse(
+        tr,
+        E[tu, ti]
+    )
+
+    # Global mean
+    global_mean = float(np.mean(fr))
+
+    ladder["global_mean"] = safe_rmse(
+        tr,
+        np.full(len(tr), global_mean)
+    )
+
+    # User and item biases
+    mu_b, b, c = fit_biases(
+        fu,
+        fi,
+        fr,
+        n_users,
+        n_items,
+        2.0,
+        10
+    )
+
+    base = (
+        mu_b
+        + b[:, None]
+        + c[None, :]
+    )
+
+    ladder["biases"] = safe_rmse(
+        tr,
+        base[tu, ti]
+    )
+
+    # Zero-filled SVD
+    svd_rank = max(
+        1,
+        min(50, n_items // 2)
+    )
+
+    zero_svd = svd_complete(
+        R,
+        svd_rank
+    )
+
+    ladder["zero_filled_svd"] = safe_rmse(
+        tr,
+        zero_svd[tu, ti]
+    )
+
+    # Residual SVD
+    residual = (R - base) * mask
+
+    residual_svd = (
+        base + svd_complete(residual, k)
+    )
+
+    ladder["residual_svd"] = safe_rmse(
+        tr,
+        residual_svd[tu, ti]
+    )
+
+    # ------------------------------------------
+    # Raw user-based kNN
+    # ------------------------------------------
+
+    user_counts = mask.sum(axis=1)
+
+    user_means = np.divide(
+        R.sum(axis=1),
+        user_counts,
+        out=np.full(n_users, mu_b),
+        where=user_counts > 0
+    )
+
+    centered_ratings = (
+        R - user_means[:, None]
+    ) * mask
+
+    S_raw_user = similarity_matrix(
+        centered_ratings,
+        mask,
+        25
+    )
+
+    raw_user_predictions = knn_predict(
+        S_raw_user,
+        R,
+        mask,
+        tu,
+        ti,
+        40,
+        fallback=mu_b
+    )
+
+    ladder["knn_raw_user"] = safe_rmse(
+        tr,
+        raw_user_predictions
+    )
+
+    # ------------------------------------------
+    # Residual user-based kNN
+    # ------------------------------------------
+
+    S_user = similarity_matrix(
+        residual,
+        mask,
+        25
+    )
+
+    user_residual_predictions = knn_predict(
+        S_user,
+        residual,
+        mask,
+        tu,
+        ti,
+        40,
+        fallback=0.0
+    )
+
+    ladder["knn_user"] = safe_rmse(
+        tr,
+        base[tu, ti] + user_residual_predictions
+    )
+
+    # ------------------------------------------
+    # Residual item-based kNN
+    # ------------------------------------------
+
+    S_item = similarity_matrix(
+        residual.T,
+        mask.T,
+        25
+    )
+
+    item_residual_predictions = knn_predict(
+        S_item,
+        residual.T,
+        mask.T,
+        ti,
+        tu,
+        40,
+        fallback=0.0
+    )
+
+    ladder["knn_item"] = safe_rmse(
+        tr,
+        base[tu, ti] + item_residual_predictions
+    )
+
+    # ------------------------------------------
+    # Funk SVD
+    # ------------------------------------------
+
+    funk_params, funk_history = fit_funk_svd(
+        fu,
+        fi,
+        fr,
+        n_users,
+        n_items,
+        k,
+        0.03,
+        0.1,
+        funk_epochs,
+        init,
+        valid=valid
+    )
+
+    funk_predictions = mf_predict(
+        funk_params,
+        tu,
+        ti
+    )
+
+    ladder["funk_svd"] = safe_rmse(
+        tr,
+        funk_predictions
+    )
+
+    funk_epochs_used = len(funk_history)
+
+    # ------------------------------------------
+    # ALS
+    # ------------------------------------------
+
+    als_params = als_biased(
+        fu,
+        fi,
+        fr,
+        n_users,
+        n_items,
+        k,
+        2.0,
+        5.0,
+        15,
+        init
+    )
+
+    als_predictions = mf_predict(
+        als_params,
+        tu,
+        ti
+    )
+
+    ladder["als"] = safe_rmse(
+        tr,
+        als_predictions
+    )
+
+    # ------------------------------------------
+    # User-based AutoRec
+    # IMPORTANT: lam = 30
+    # ------------------------------------------
+
+    autorec_user, _ = fit_autorec(
+        R,
+        mask,
+        64,
+        30,
+        0.01,
+        autorec_steps,
+        init
+    )
+
+    ladder["autorec_user"] = safe_rmse(
+        tr,
+        autorec_user[tu, ti]
+    )
+
+    # ------------------------------------------
+    # Item-based AutoRec
+    # IMPORTANT: lam = 30
+    # ------------------------------------------
+
+    autorec_item, _ = fit_autorec(
+        R.T,
+        mask.T,
+        64,
+        30,
+        0.01,
+        autorec_steps,
+        init
+    )
+
+    ladder["autorec_item"] = safe_rmse(
+        tr,
+        autorec_item.T[tu, ti]
+    )
+
+    # ==========================================
+    # 4. ALS regularization sweep
+    # ==========================================
+
+    lambda_sweep = {}
+
+    for lam_f in (2.0, 3.0, 5.0, 8.0, 12.0):
+
+        sweep_model = als_biased(
+            fu,
+            fi,
+            fr,
+            n_users,
+            n_items,
+            k,
+            2.0,
+            lam_f,
+            15,
+            init
+        )
+
+        predictions = mf_predict(
+            sweep_model,
+            vu,
+            vi
+        )
+
+        lambda_sweep[float(lam_f)] = safe_rmse(
+            vr,
+            predictions
+        )
+
+    # ==========================================
+    # 5. Latent factor recovery
+    # ==========================================
+
+    recovery = {
+        "funk_svd": np.round(
+            subspace_cosines(
+                funk_params["V"],
+                world["V"]
+            ),
+            3
+        ).tolist(),
+
+        "als": np.round(
+            subspace_cosines(
+                als_params["V"],
+                world["V"]
+            ),
+            3
+        ).tolist()
+    }
+
+    # ==========================================
+    # 6. Implied regularization parameters
+    # ==========================================
+
+    implied = implied_lambdas(
+        world,
+        noise
+    )
+
+    # ==========================================
+    # 7. Selection bias experiment
+    # ==========================================
+
+    selection = {}
+
+    for bt in betas:
+
+        su, si, sr = sample_ratings(
+            world,
+            n_obs,
+            bt,
+            noise,
+            seed + 1
+        )
+
+        s_train, s_test = split_per_user(
+            su,
+            si,
+            sr,
+            0.1,
+            seed + 2
+        )
+
+        stu, sti, str_ = s_train
+        svu, svi, svr = s_test
+
+        # ALS on selection-biased training data
+        selection_als = als_biased(
+            stu,
+            sti,
+            str_,
+            n_users,
+            n_items,
+            k,
+            2.0,
+            5.0,
+            15,
+            init
+        )
+
+        result = offline_vs_truth(
+            selection_als,
+            s_test,
+            world
+        )
+
+        # Bias-only model
+        smu, sb, sc = fit_biases(
+            stu,
+            sti,
+            str_,
+            n_users,
+            n_items,
+            2.0,
+            10
+        )
+
+        bias_predictions = (
+            smu + sb[svu] + sc[svi]
+        )
+
+        result["obs_mean"] = float(
+            np.mean(sr)
+        )
+
+        result["biases_offline"] = safe_rmse(
+            svr,
+            bias_predictions
+        )
+
+        selection[float(bt)] = result
+
+    # ==========================================
+    # 8. Implicit-feedback evaluation
+    # ==========================================
+
+    loo_users, loo_items, loo_test_items = leave_one_out(
+        users,
+        items,
+        n_users,
+        seed + 6
+    )
+
+    _, loo_mask = to_matrix(
+        loo_users,
+        loo_items,
+        1.0,
+        n_users,
+        n_items
+    )
+
+    full_R, _ = to_matrix(
+        users,
+        items,
+        ratings,
+        n_users,
+        n_items
+    )
+
+    loo_ratings = full_R[
+        loo_users,
+        loo_items
+    ]
+
+    def evaluate_implicit(scores):
+
+        metrics = rank_metrics(
+            scores,
+            loo_mask,
+            loo_test_items,
+            10
+        )
+
+        metrics["true_value"] = round(
+            true_value_at_k(
+                scores,
+                loo_mask,
+                E,
+                10
+            ),
+            3
+        )
+
+        return metrics
+
+    implicit = {}
+
+    # Popularity
+    popularity_counts = np.bincount(
+        loo_items,
+        minlength=n_items
+    )
+
+    popularity_scores = np.broadcast_to(
+        popularity_counts[None, :],
+        (n_users, n_items)
+    )
+
+    implicit["popularity"] = evaluate_implicit(
+        popularity_scores
+    )
+
+    # BPR
+    bpr_scores = fit_implicit_mf(
+        loo_users,
+        loo_items,
+        n_users,
+        n_items,
+        k,
+        "bpr",
+        0.05,
+        0.01,
+        implicit_updates,
+        256,
+        init
+    )
+
+    implicit["bpr"] = evaluate_implicit(
+        bpr_scores
+    )
+
+    # Hinge
+    hinge_scores = fit_implicit_mf(
+        loo_users,
+        loo_items,
+        n_users,
+        n_items,
+        k,
+        "hinge",
+        0.05,
+        0.01,
+        implicit_updates,
+        256,
+        init
+    )
+
+    implicit["hinge"] = evaluate_implicit(
+        hinge_scores
+    )
+
+    # Binary cross-entropy
+    bce_scores = fit_implicit_mf(
+        loo_users,
+        loo_items,
+        n_users,
+        n_items,
+        k,
+        "bce",
+        0.05,
+        0.01,
+        implicit_updates,
+        256,
+        init
+    )
+
+    implicit["bce"] = evaluate_implicit(
+        bce_scores
+    )
+
+    # Explicit rating model
+    rating_params = als_biased(
+        loo_users,
+        loo_items,
+        loo_ratings,
+        n_users,
+        n_items,
+        k,
+        2.0,
+        5.0,
+        15,
+        init
+    )
+
+    rating_scores = (
+        rating_params["mu"]
+        + rating_params["b"][:, None]
+        + rating_params["c"][None, :]
+        + rating_params["U"] @ rating_params["V"].T
+    )
+
+    implicit["rating_model"] = evaluate_implicit(
+        rating_scores
+    )
+
+    # True exposure
+    true_exposure_scores = exposure_logits(
+        world,
+        beta
+    )
+
+    implicit["true_exposure"] = evaluate_implicit(
+        true_exposure_scores
+    )
+
+    # True expected rating
+    # The key must be "true_rating" (singular).
+    implicit["true_rating"] = evaluate_implicit(
+        E
+    )
+
+    # ==========================================
+    # 9. Cold-start experiment
+    # ==========================================
+
+    warm, cold_rows, is_cold = cold_start_split(
+        users,
+        items,
+        ratings,
+        n_items,
+        0.1,
+        seed + 4
+    )
+
+    warm_fit, warm_test = split_per_user(
+        *warm,
+        0.1,
+        seed + 5
+    )
+
+    wfu, wfi, wfr = warm_fit
+    wtu, wti, wtr = warm_test
+
+    cu, ci, cr = cold_rows
+
+    cold_mu, cold_b, cold_c = fit_biases(
+        wfu,
+        wfi,
+        wfr,
+        n_users,
+        n_items,
+        2.0,
+        10
+    )
+
+    cold_global_mean = float(
+        np.mean(wfr)
+    )
+
+    # ------------------------------------------
+    # Factorization Machine setup
+    # ------------------------------------------
+
+    tags = np.asarray(
+        world["tags"],
+        dtype=float
+    )
+
+    n_tags = tags.shape[1]
+
+    D = (
+        n_users
+        + n_items
+        + n_tags
+    )
+
+    def fm_predictions(params, query_users, query_items, tag_matrix):
+
+        idx, val = fm_design(
+            query_users,
+            query_items,
+            tag_matrix,
+            n_users,
+            n_items
+        )
+
+        predictions, _ = fm_forward(
+            idx,
+            val,
+            params["mu"],
+            params["w"],
+            params["V"]
+        )
+
+        return predictions
+
+    # ------------------------------------------
+    # FM with tags
+    # ------------------------------------------
+
+    fm_train_idx, fm_train_val = fm_design(
+        wfu,
+        wfi,
+        tags,
+        n_users,
+        n_items
+    )
+
+    fm_tags_params = fit_fm(
+        fm_train_idx,
+        fm_train_val,
+        wfr,
+        D,
+        k,
+        0.005,
+        0.03,
+        fm_epochs,
+        64,
+        init
+    )
+
+    cold_fm_predictions = fm_predictions(
+        fm_tags_params,
+        cu,
+        ci,
+        tags
+    )
+
+    warm_fm_predictions = fm_predictions(
+        fm_tags_params,
+        wtu,
+        wti,
+        tags
+    )
+
+    # ------------------------------------------
+    # FM with IDs only: zero tags in train/test
+    # ------------------------------------------
+
+    zero_tags = np.zeros_like(tags)
+
+    ids_train_idx, ids_train_val = fm_design(
+        wfu,
+        wfi,
+        zero_tags,
+        n_users,
+        n_items
+    )
+
+    fm_ids_params = fit_fm(
+        ids_train_idx,
+        ids_train_val,
+        wfr,
+        D,
+        k,
+        0.005,
+        0.03,
+        fm_epochs,
+        64,
+        init
+    )
+
+    warm_ids_predictions = fm_predictions(
+        fm_ids_params,
+        wtu,
+        wti,
+        zero_tags
+    )
+
+    # ------------------------------------------
+    # Cold-start metrics
+    # ------------------------------------------
+
+    cold_start = {
+
+        "cold_global_mean": safe_rmse(
+            cr,
+            np.full(len(cr), cold_global_mean)
+        ),
+
+        "cold_user_bias": safe_rmse(
+            cr,
+            cold_mu + cold_b[cu]
+        ),
+
+        "cold_fm_tags": safe_rmse(
+            cr,
+            cold_fm_predictions
+        ),
+
+        "cold_oracle": safe_rmse(
+            cr,
+            E[cu, ci]
+        ),
+
+        "warm_biases": safe_rmse(
+            wtr,
+            cold_mu + cold_b[wtu] + cold_c[wti]
+        ),
+
+        "warm_fm_ids": safe_rmse(
+            wtr,
+            warm_ids_predictions
+        ),
+
+        "warm_fm_tags": safe_rmse(
+            wtr,
+            warm_fm_predictions
+        )
+    }
+
+    # ==========================================
+    # 10. NeuMF ablation
+    # ==========================================
+
+    neumf = neumf_ablation(
+        loo_users,
+        loo_items,
+        loo_test_items,
+        world,
+        n_users,
+        n_items,
+        k,
+        neumf_steps,
+        512,
+        4,
+        0.005,
+        init
+    )
+
+    # ==========================================
+    # 11. Closed feedback-loop experiments
+    # ==========================================
+
+    loop = {}
+
+    loop_specs = [
+        ("random", "random", 1.0),
+        ("greedy", "greedy", 1.0),
+        ("epsilon", "epsilon", 1.0),
+        ("thompson", "thompson", 1.0),
+        ("thompson_half", "thompson", 0.5)
+    ]
+
+    fifth = max(
+        1,
+        rounds // 5
+    )
+
+    for name, policy, nu in loop_specs:
+
+        result = run_feedback_loop(
+            world,
+            policy,
+            rounds,
+            init_obs,
+            beta,
+            noise,
+            seed + 7,
+            k=k,
+            nu=nu
+        )
+
+        rewards = np.asarray(
+            result["rewards"],
+            dtype=float
+        )
+
+        regrets = np.asarray(
+            result["regrets"],
+            dtype=float
+        )
+
+        first_fifth = (
+            float(np.mean(rewards[:fifth]))
+            if len(rewards) else 0.0
+        )
+
+        last_fifth = (
+            float(np.mean(rewards[-fifth:]))
+            if len(rewards) else 0.0
+        )
+
+        loop[name] = {
+            "first_fifth": first_fifth,
+            "last_fifth": last_fifth,
+            "mean_reward": (
+                float(np.mean(rewards))
+                if len(rewards) else 0.0
+            ),
+            "mean_regret": (
+                float(np.mean(regrets))
+                if len(regrets) else 0.0
+            ),
+            "coverage": float(result["coverage"]),
+            "exposure_gini": float(result["exposure_gini"]),
+            "truth_rmse": float(result["truth_rmse"]),
+            "pop_share": float(result["pop_share"])
+        }
+
+    # ==========================================
+    # 12. Return complete report
+    # ==========================================
+
+    return {
+        "stats": stats,
+        "ladder": ladder,
+        "funk_epochs_used": funk_epochs_used,
+        "lambda_sweep": lambda_sweep,
+        "implied_lambdas": implied,
+        "recovery": recovery,
+        "selection": selection,
+        "implicit": implicit,
+        "cold_start": cold_start,
+        "neumf": neumf,
+        "loop": loop
+    }
+
