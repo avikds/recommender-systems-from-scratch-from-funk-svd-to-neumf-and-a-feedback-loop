@@ -1899,3 +1899,290 @@ def cold_start_split(users, items, ratings, n_items, frac, seed):
 
     return warm, cold_rows, is_cold
 
+# Step 25 - NeuMF
+from tinygrad import Tensor, TinyJit
+from tinygrad.nn.optim import Adam
+
+
+class NeuMF:
+    def __init__(self, n_users, n_items, k_gmf, k_mlp,
+                 hidden, seed, use_gmf=True, use_mlp=True):
+
+        # Initialize the seeded NumPy random generator
+        rng = np.random.default_rng([seed, 6])
+
+        # Helper function to create realized float32 tinygrad tensors
+        def to_tensor(a):
+            return (
+                Tensor(np.asarray(a, dtype=np.float32))
+                .contiguous()
+                .realize()
+            )
+
+        # Store pathway configuration
+        self.use_gmf = use_gmf
+        self.use_mlp = use_mlp
+
+        if not use_gmf and not use_mlp:
+            raise ValueError("At least one pathway must be enabled.")
+
+        # --------------------------------------------------
+        # 1. Initialize GMF and MLP embedding tables
+        # --------------------------------------------------
+
+        # GMF user embeddings
+        self.P = to_tensor(
+            rng.normal(0.0, 0.1, (n_users, k_gmf))
+        )
+
+        # GMF item embeddings
+        self.Q = to_tensor(
+            rng.normal(0.0, 0.1, (n_items, k_gmf))
+        )
+
+        # MLP user embeddings
+        self.U = to_tensor(
+            rng.normal(0.0, 0.1, (n_users, k_mlp))
+        )
+
+        # MLP item embeddings
+        self.V = to_tensor(
+            rng.normal(0.0, 0.1, (n_items, k_mlp))
+        )
+
+        # --------------------------------------------------
+        # 2. Initialize MLP layers
+        # --------------------------------------------------
+
+        self.layers = []
+
+        # Initial MLP input dimension
+        d = 2 * k_mlp
+
+        for h in hidden:
+
+            # He initialization for layer weights
+            W = to_tensor(
+                rng.normal(
+                    0.0,
+                    np.sqrt(2.0 / d),
+                    (d, h)
+                )
+            )
+
+            # Initialize layer biases to zero
+            b = to_tensor(np.zeros(h))
+
+            self.layers.append((W, b))
+
+            # Update input dimension for the next layer
+            d = h
+
+        # --------------------------------------------------
+        # 3. Initialize fusion weights
+        # --------------------------------------------------
+
+        width = (
+            (k_gmf if use_gmf else 0)
+            + (hidden[-1] if use_mlp else 0)
+        )
+
+        self.w = to_tensor(
+            rng.normal(0.0, 0.5, width)
+        )
+
+        # Global offset
+        self.a = to_tensor(np.zeros(1))
+
+    # --------------------------------------------------
+    # 4. Return trainable parameters
+    # --------------------------------------------------
+
+    def parameters(self):
+
+        params = [self.w, self.a]
+
+        # Include GMF embeddings when GMF is enabled
+        if self.use_gmf:
+            params.extend([
+                self.P,
+                self.Q
+            ])
+
+        # Include MLP embeddings and layer parameters
+        if self.use_mlp:
+
+            params.extend([
+                self.U,
+                self.V
+            ])
+
+            for W, b in self.layers:
+                params.extend([W, b])
+
+        return params
+
+    # --------------------------------------------------
+    # 5. Forward pass
+    # --------------------------------------------------
+
+    def __call__(self, u, i):
+
+        active_z = []
+
+        # GMF pathway
+        if self.use_gmf:
+
+            # Element-wise interaction between user and item embeddings
+            z_gmf = self.P[u] * self.Q[i]
+
+            active_z.append(z_gmf)
+
+        # MLP pathway
+        if self.use_mlp:
+
+            # Concatenate user and item embeddings
+            h = self.U[u].cat(
+                self.V[i],
+                dim=1
+            )
+
+            # Pass through all MLP layers
+            for W, b in self.layers:
+
+                h = (h @ W + b).relu()
+
+            active_z.append(h)
+
+        # --------------------------------------------------
+        # 6. Fuse active pathways
+        # --------------------------------------------------
+
+        # Concatenate the active pathway representations
+        z = active_z[0]
+
+        if len(active_z) > 1:
+            z = z.cat(*active_z[1:], dim=1)
+
+        # Calculate the final recommendation logits
+        logits = (z * self.w).sum(axis=1) + self.a
+
+        return logits
+
+    # --------------------------------------------------
+    # 7. Generate the full user-item score matrix
+    # --------------------------------------------------
+
+    def score_matrix(self, chunk=200):
+
+        # Extract trained parameters as NumPy arrays
+        w = self.w.numpy()
+        a = float(self.a.numpy()[0])
+
+        n_users = self.P.shape[0]
+        n_items = self.Q.shape[0]
+
+        # Retrieve GMF parameters if enabled
+        if self.use_gmf:
+            P = self.P.numpy()
+            Q = self.Q.numpy()
+
+        # Retrieve MLP parameters if enabled
+        if self.use_mlp:
+
+            U = self.U.numpy()
+            V = self.V.numpy()
+
+            layers = [
+                (W.numpy(), b.numpy())
+                for W, b in self.layers
+            ]
+
+        # Allocate the complete score matrix
+        scores = np.empty(
+            (n_users, n_items),
+            dtype=np.float32
+        )
+
+        # Process users in chunks
+        for start in range(0, n_users, chunk):
+
+            end = min(start + chunk, n_users)
+            current_users = end - start
+
+            active_z = []
+
+            # --------------------------------------------------
+            # GMF pathway
+            # --------------------------------------------------
+
+            if self.use_gmf:
+
+                z_gmf = (
+                    P[start:end, None, :]
+                    * Q[None, :, :]
+                )
+
+                active_z.append(z_gmf)
+
+            # --------------------------------------------------
+            # MLP pathway
+            # --------------------------------------------------
+
+            if self.use_mlp:
+
+                # Repeat user embeddings for every item
+                user_emb = np.broadcast_to(
+                    U[start:end, None, :],
+                    (current_users, n_items, U.shape[1])
+                )
+
+                # Repeat item embeddings for every user
+                item_emb = np.broadcast_to(
+                    V[None, :, :],
+                    (current_users, n_items, V.shape[1])
+                )
+
+                # Concatenate user and item embeddings
+                h = np.concatenate(
+                    [user_emb, item_emb],
+                    axis=2
+                )
+
+                # Flatten user-item pairs into a batch
+                h = h.reshape(
+                    current_users * n_items,
+                    -1
+                )
+
+                # Apply every MLP layer
+                for W, b in layers:
+
+                    h = np.maximum(h @ W + b, 0.0)
+
+                # Restore user-item dimensions
+                z_mlp = h.reshape(
+                    current_users,
+                    n_items,
+                    -1
+                )
+
+                active_z.append(z_mlp)
+
+            # --------------------------------------------------
+            # Fusion layer
+            # --------------------------------------------------
+
+            # Concatenate the active pathway representations
+            z = np.concatenate(
+                active_z,
+                axis=2
+            )
+
+            # Calculate logits for the current user chunk
+            scores[start:end] = (
+                np.sum(z * w[None, None, :], axis=2) + a
+            )
+
+        return scores
+
