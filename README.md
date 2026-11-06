@@ -22,6 +22,7 @@ python scaffold.py
 - [x] **10.** fit_funk_svd
 - [x] **11.** als_biased
 - [x] **12.** pmf_objective
+- [x] **13.** subspace_cosines
 
 ---
 

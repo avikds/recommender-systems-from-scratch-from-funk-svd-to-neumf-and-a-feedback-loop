@@ -815,3 +815,29 @@ def implied_lambdas(world, noise):
         "lam_factor": [float(x) for x in lam_factor]
     }
 
+# Step 13 - subspace_cosines
+def subspace_cosines(A, B):
+    # Convert inputs to floating-point NumPy arrays
+    A = np.asarray(A, dtype=float)
+    B = np.asarray(B, dtype=float)
+
+    # Center each matrix by subtracting its column means
+    A = A - A.mean(axis=0, keepdims=True)
+    B = B - B.mean(axis=0, keepdims=True)
+
+    # Compute orthonormal bases using reduced QR decomposition
+    Qa, _ = np.linalg.qr(A, mode="reduced")
+    Qb, _ = np.linalg.qr(B, mode="reduced")
+
+    # Compute the cross-product of the orthonormal bases
+    cross_product = Qa.T @ Qb
+
+    # Calculate the singular values in descending order
+    # These are the cosines of the principal angles
+    cosines = np.linalg.svd(
+        cross_product,
+        compute_uv=False
+    )
+
+    return cosines
+
