@@ -2602,3 +2602,322 @@ def predictive_variance(U, V, A_u, A_v, sigma):
 
     return variance
 
+# Step 29 - run_feedback_loop
+def run_feedback_loop(world, policy, rounds, init_obs, beta, noise,
+                      seed, k=5, lam_b=2.0, lam_f=6.0,
+                      eps=0.1, nu=1.0):
+
+    # ------------------------------------------
+    # 1. Setup and reproducible random generator
+    # ------------------------------------------
+
+    rng = np.random.default_rng([seed, 8])
+
+    E = expected_ratings(world)
+
+    M, N = E.shape
+
+    sigma = np.sqrt(noise ** 2 + 1.0 / 12.0)
+
+    # Normalize policy name
+    policy = str(policy).lower().replace("-", "_")
+
+    if policy == "epsilon_greedy":
+        policy = "epsilon"
+
+    if policy not in ("greedy", "thompson", "epsilon", "random"):
+        raise ValueError(
+            "policy must be greedy, thompson, epsilon, or random."
+        )
+
+    if rounds < 0:
+        raise ValueError("rounds must be non-negative.")
+
+    if k <= 0:
+        raise ValueError("k must be positive.")
+
+    if noise < 0:
+        raise ValueError("noise must be non-negative.")
+
+    if not 0.0 <= eps <= 1.0:
+        raise ValueError("eps must be between 0 and 1.")
+
+    # ------------------------------------------
+    # 2. Seed the initial interaction log
+    # ------------------------------------------
+
+    us, it, ra = sample_ratings(
+        world,
+        init_obs,
+        beta,
+        noise,
+        seed
+    )
+
+    R, seen = to_matrix(
+        us,
+        it,
+        ra,
+        M,
+        N
+    )
+
+    # ------------------------------------------
+    # 3. Identify the most popular items
+    # ------------------------------------------
+
+    item_counts = np.bincount(
+        it,
+        minlength=N
+    )
+
+    # Stable descending sort of item counts
+    popular_order = np.argsort(
+        -item_counts,
+        kind="stable"
+    )
+
+    is_pop = np.zeros(N, dtype=bool)
+
+    is_pop[popular_order[:N // 10]] = True
+
+    # ------------------------------------------
+    # 4. Initialize ALS parameters
+    # ------------------------------------------
+
+    lam_vec = np.r_[
+        lam_b,
+        np.full(k, lam_f)
+    ]
+
+    U = np.c_[
+        np.zeros(M),
+        rng.normal(0.0, 0.1, (M, k))
+    ]
+
+    V = np.c_[
+        np.zeros(N),
+        rng.normal(0.0, 0.1, (N, k))
+    ]
+
+    # ------------------------------------------
+    # 5. Initialize feedback metrics
+    # ------------------------------------------
+
+    rewards = []
+    regrets = []
+    pop_shares = []
+
+    shown = np.zeros(N, dtype=int)
+
+    last_greedy_scores = None
+
+    user_indices = np.arange(M)
+
+    # ------------------------------------------
+    # 6. Run the feedback loop
+    # ------------------------------------------
+
+    for _ in range(rounds):
+
+        # --------------------------------------
+        # 6A. Prepare current observed data
+        # --------------------------------------
+
+        m = seen.astype(float)
+
+        mu = float(R[seen].mean())
+
+        T = (R - mu) * m
+
+        # --------------------------------------
+        # 6B. Retrain using two ALS sweeps
+        # --------------------------------------
+
+        U, V, A_u, A_v = als_sweep(
+            T,
+            m,
+            U,
+            V,
+            lam_vec
+        )
+
+        U, V, A_u, A_v = als_sweep(
+            T,
+            m,
+            U,
+            V,
+            lam_vec
+        )
+
+        # --------------------------------------
+        # 6C. Calculate greedy recommendation scores
+        # --------------------------------------
+
+        greedy_scores = (
+            mu
+            + U[:, 0][:, None]
+            + V[:, 0][None, :]
+            + U[:, 1:] @ V[:, 1:].T
+        )
+
+        # Preserve the last unmodified greedy scores
+        last_greedy_scores = greedy_scores.copy()
+
+        # --------------------------------------
+        # 6D. Select scores using the policy
+        # --------------------------------------
+
+        if policy == "greedy":
+
+            S = greedy_scores.copy()
+
+        elif policy == "thompson":
+
+            variance = predictive_variance(
+                U,
+                V,
+                A_u,
+                A_v,
+                sigma
+            )
+
+            S = (
+                greedy_scores
+                + nu
+                * np.sqrt(variance)
+                * rng.normal(size=(M, N))
+            )
+
+        elif policy == "epsilon":
+
+            S = np.where(
+                rng.random((M, N)) < eps / N,
+                np.inf,
+                greedy_scores
+            )
+
+        else:  # random
+
+            S = rng.random((M, N))
+
+        # --------------------------------------
+        # 6E. Exclude previously observed items
+        # --------------------------------------
+
+        S = np.where(
+            seen,
+            -np.inf,
+            S
+        )
+
+        # Select one item for each user
+        pick = np.argmax(
+            S,
+            axis=1
+        )
+
+        # --------------------------------------
+        # 6F. Calculate reward and regret
+        # --------------------------------------
+
+        best = np.where(
+            seen,
+            -np.inf,
+            E
+        ).max(axis=1)
+
+        got = E[user_indices, pick]
+
+        rewards.append(
+            float(got.mean())
+        )
+
+        regrets.append(
+            float((best - got).mean())
+        )
+
+        # --------------------------------------
+        # 6G. Simulate user ratings
+        # --------------------------------------
+
+        y = np.clip(
+            np.round(
+                got
+                + rng.normal(
+                    0.0,
+                    noise,
+                    size=M
+                )
+            ),
+            1.0,
+            5.0
+        )
+
+        # Record the new ratings
+        R[user_indices, pick] = y
+
+        # Mark recommended items as observed
+        seen[user_indices, pick] = True
+
+        # Update per-item exposure counts
+        np.add.at(
+            shown,
+            pick,
+            1
+        )
+
+        # Record the share of recommendations
+        # belonging to the initially popular items
+        pop_shares.append(
+            float(is_pop[pick].mean())
+        )
+
+    # ------------------------------------------
+    # 7. Calculate final summary metrics
+    # ------------------------------------------
+
+    coverage = float(
+        np.mean(shown > 0)
+    )
+
+    exposure_gini = float(
+        gini(shown)
+    )
+
+    # Compare the last greedy score matrix with
+    # the true expected ratings, clipping both.
+    if last_greedy_scores is not None:
+
+        truth_rmse = float(
+            np.sqrt(
+                np.mean(
+                    (
+                        np.clip(last_greedy_scores, 1.0, 5.0)
+                        - np.clip(E, 1.0, 5.0)
+                    ) ** 2
+                )
+            )
+        )
+
+    else:
+        truth_rmse = 0.0
+
+    pop_share = (
+        float(np.mean(pop_shares))
+        if pop_shares else 0.0
+    )
+
+    # ------------------------------------------
+    # 8. Return results
+    # ------------------------------------------
+
+    return {
+        "rewards": rewards,
+        "regrets": regrets,
+        "coverage": coverage,
+        "exposure_gini": exposure_gini,
+        "truth_rmse": truth_rmse,
+        "pop_share": pop_share
+    }
+
