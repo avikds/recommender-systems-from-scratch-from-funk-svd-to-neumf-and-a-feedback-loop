@@ -254,3 +254,63 @@ def dataset_stats(users, items, ratings, n_users, n_items):
         "items_unrated": items_unrated
     }
 
+# Step 5 - fit_biases
+def rmse(y, pred):
+    # Convert inputs to NumPy arrays
+    y = np.asarray(y, dtype=float)
+    pred = np.asarray(pred, dtype=float)
+
+    # Clip predictions to the valid rating range
+    pred = np.clip(pred, 1.0, 5.0)
+
+    # Calculate and return root mean squared error
+    return float(np.sqrt(np.mean((y - pred) ** 2)))
+
+
+def fit_biases(users, items, ratings, n_users, n_items, lam, sweeps):
+    # Convert inputs to NumPy arrays
+    users = np.asarray(users, dtype=int)
+    items = np.asarray(items, dtype=int)
+    ratings = np.asarray(ratings, dtype=float)
+
+    # Ensure regularization is positive
+    if lam <= 0:
+        raise ValueError("lam must be positive")
+
+    # Initialize global mean and item biases
+    mu = float(ratings.mean())
+    b = np.zeros(n_users)
+    c = np.zeros(n_items)
+
+    # Precompute the number of ratings per user and item
+    user_counts = np.bincount(users, minlength=n_users)
+    item_counts = np.bincount(items, minlength=n_items)
+
+    # Alternating optimization using closed-form updates
+    for _ in range(sweeps):
+
+        # Update every user bias using the current item biases
+        user_residuals = ratings - mu - c[items]
+
+        user_sums = np.bincount(
+            users,
+            weights=user_residuals,
+            minlength=n_users
+        )
+
+        b = user_sums / (lam + user_counts)
+
+        # Update every item bias using the newly updated user biases
+        item_residuals = ratings - mu - b[users]
+
+        item_sums = np.bincount(
+            items,
+            weights=item_residuals,
+            minlength=n_items
+        )
+
+        c = item_sums / (lam + item_counts)
+
+    # Return global mean, user biases, and item biases
+    return mu, b, c
+
