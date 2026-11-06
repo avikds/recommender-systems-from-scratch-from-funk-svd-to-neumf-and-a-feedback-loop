@@ -314,3 +314,61 @@ def fit_biases(users, items, ratings, n_users, n_items, lam, sweeps):
     # Return global mean, user biases, and item biases
     return mu, b, c
 
+# Step 6 - similarity_matrix
+def to_matrix(users, items, values, n_users, n_items):
+    # Initialize the ratings matrix with zeros
+    R = np.zeros((n_users, n_items), dtype=float)
+
+    # Initialize the Boolean observation mask
+    mask = np.zeros((n_users, n_items), dtype=bool)
+
+    # Fill observed user-item entries
+    # Values can be either an array or a single number
+    R[users, items] = values
+
+    # Mark observed entries as True
+    mask[users, items] = True
+
+    return R, mask
+
+
+def similarity_matrix(E, mask, shrink):
+    # Convert inputs to NumPy arrays
+    E = np.asarray(E, dtype=float)
+    mask = np.asarray(mask, dtype=bool)
+
+    # Convert the Boolean mask into a numerical matrix
+    M = mask.astype(float)
+
+    # Keep only observed entries in the centered matrix
+    X = E * M
+
+    # Calculate the numerator using matrix multiplication
+    # Each entry contains the dot product over co-observed columns
+    numerator = X @ X.T
+
+    # Calculate the number of shared observed columns
+    overlap = M @ M.T
+
+    # Calculate squared norms over the shared observed columns
+    left_norm_sq = (E ** 2 * M) @ M.T
+
+    # The corresponding right squared norms are the transpose
+    right_norm_sq = left_norm_sq.T
+
+    # Calculate the cosine similarity denominator
+    denominator = np.sqrt(
+        np.maximum(left_norm_sq * right_norm_sq, 1e-12)
+    )
+
+    # Calculate overlap-only cosine similarity
+    similarity = numerator / denominator
+
+    # Apply shrinkage based on the number of shared observations
+    similarity *= overlap / (overlap + shrink + 1e-12)
+
+    # Prevent a row from being its own neighbour
+    np.fill_diagonal(similarity, 0.0)
+
+    return similarity
+

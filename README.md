@@ -15,6 +15,7 @@ python scaffold.py
 - [x] **3.** split_per_user
 - [x] **4.** dataset_stats
 - [x] **5.** fit_biases
+- [x] **6.** similarity_matrix
 
 ---
 
