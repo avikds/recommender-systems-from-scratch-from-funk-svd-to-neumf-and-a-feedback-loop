@@ -1141,3 +1141,67 @@ def fit_autorec(R, mask, k, lam, lr, steps, seed):
 
     return completed_matrix, params
 
+# Step 17 - leave_one_out
+def leave_one_out(users, items, n_users, seed):
+    # Convert inputs to NumPy arrays
+    users = np.asarray(users, dtype=int)
+    items = np.asarray(items, dtype=int)
+
+    # Create a reproducible random number generator
+    rng = np.random.default_rng(seed)
+
+    # Randomly permute the input row indices
+    perm = rng.permutation(len(users))
+
+    # Group rows by user while preserving their randomized order
+    grouped = perm[
+        np.argsort(users[perm], kind="stable")
+    ]
+
+    # Identify the boundaries of each user's group
+    grouped_users = users[grouped]
+
+    boundaries = np.concatenate((
+        [0],
+        np.flatnonzero(
+            grouped_users[1:] != grouped_users[:-1]
+        ) + 1,
+        [len(users)]
+    ))
+
+    # Mark interactions selected for the test set
+    test_mask = np.zeros(len(users), dtype=bool)
+
+    # Store the held-out item for each user
+    # -1 indicates that the user has fewer than two interactions
+    test_items = np.full(n_users, -1, dtype=int)
+
+    # Process each user's group
+    for start, end in zip(boundaries[:-1], boundaries[1:]):
+
+        # Retrieve the randomized rows for the current user
+        group = grouped[start:end]
+
+        # Hold out one interaction only if the user has at least two
+        if len(group) >= 2:
+
+            # Select the first row in the user's randomized order
+            held_out_idx = group[0]
+
+            # Mark this interaction as held out
+            test_mask[held_out_idx] = True
+
+            # Store the held-out item for this user
+            user_id = users[held_out_idx]
+            test_items[user_id] = items[held_out_idx]
+
+    # Retrieve training indices in the original input order
+    train_idx = np.flatnonzero(~test_mask)
+
+    # Return training users, training items, and held-out items
+    return (
+        users[train_idx],
+        items[train_idx],
+        test_items
+    )
+

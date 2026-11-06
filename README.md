@@ -26,6 +26,7 @@ python scaffold.py
 - [x] **14.** offline_vs_truth
 - [x] **15.** autorec_loss_grads
 - [x] **16.** fit_autorec
+- [x] **17.** leave_one_out
 
 ---
 
