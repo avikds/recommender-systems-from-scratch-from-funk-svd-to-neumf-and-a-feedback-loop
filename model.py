@@ -1508,3 +1508,136 @@ def ranking_step(P, Q, c, u, i, j, lr, lam, loss="bpr", margin=1.0):
     # Return the mean objective as a Python float
     return float(objective)
 
+# Step 21 - fit_implicit_mf
+def bce_step(P, Q, c, a, u, i, j, lr, lam):
+    # Convert indices to NumPy arrays
+    u = np.asarray(u, dtype=int)
+    i = np.asarray(i, dtype=int)
+    j = np.asarray(j, dtype=int)
+
+    # Save all parameter values at the start of the update
+    p_old = P[u].copy()
+    qi_old = Q[i].copy()
+    qj_old = Q[j].copy()
+
+    ci_old = c[i].copy()
+    cj_old = c[j].copy()
+    a_old = float(a[0])
+
+    # Calculate positive and negative interaction logits
+    s_ui = (
+        a_old
+        + ci_old
+        + np.sum(p_old * qi_old, axis=1)
+    )
+
+    s_uj = (
+        a_old
+        + cj_old
+        + np.sum(p_old * qj_old, axis=1)
+    )
+
+    # Calculate gradient weights
+    g_plus = sigmoid(-s_ui)
+    g_minus = -sigmoid(s_uj)
+
+    # Calculate the pointwise binary cross-entropy objective
+    objective = (
+        np.mean(np.logaddexp(0.0, -s_ui))
+        + np.mean(np.logaddexp(0.0, s_uj))
+    )
+
+    # Calculate gradients using the old parameter values
+    grad_P = (
+        g_plus[:, None] * qi_old
+        + g_minus[:, None] * qj_old
+        - lam * p_old
+    )
+
+    grad_Qi = (
+        g_plus[:, None] * p_old
+        - lam * qi_old
+    )
+
+    grad_Qj = (
+        g_minus[:, None] * p_old
+        - lam * qj_old
+    )
+
+    grad_ci = g_plus - lam * ci_old
+    grad_cj = g_minus - lam * cj_old
+
+    # Accumulate parameter updates using the full learning rate.
+    # Do NOT divide these updates by the batch size.
+    np.add.at(P, u, lr * grad_P)
+
+    np.add.at(Q, i, lr * grad_Qi)
+    np.add.at(Q, j, lr * grad_Qj)
+
+    np.add.at(c, i, lr * grad_ci)
+    np.add.at(c, j, lr * grad_cj)
+
+    # Update the global offset using the batch mean
+    a[0] += lr * np.mean(g_plus + g_minus)
+
+    return float(objective)
+
+
+def fit_implicit_mf(users, items, n_users, n_items, k,
+                    loss, lr, lam, n_updates, batch, seed,
+                    margin=1.0):
+
+    # Create the independent random generator
+    rng = np.random.default_rng([seed, 4])
+
+    # Initialize user and item latent factors in the specified order
+    P = rng.normal(0.0, 0.1, size=(n_users, k))
+    Q = rng.normal(0.0, 0.1, size=(n_items, k))
+
+    # Initialize item biases and global offset
+    c = np.zeros(n_items)
+    a = np.zeros(1)
+
+    # Build the binary training interaction mask
+    _, train_mask = to_matrix(
+        users,
+        items,
+        1.0,
+        n_users,
+        n_items
+    )
+
+    # Perform the specified number of minibatch updates
+    for _ in range(n_updates):
+
+        # Sample positive and negative interaction triples
+        u, i, j = sample_triples(
+            train_mask,
+            users,
+            items,
+            batch,
+            rng
+        )
+
+        # Select the appropriate optimization objective
+        if loss == "bce":
+
+            bce_step(
+                P, Q, c, a,
+                u, i, j,
+                lr, lam
+            )
+
+        else:
+
+            ranking_step(
+                P, Q, c,
+                u, i, j,
+                lr, lam,
+                loss=loss,
+                margin=margin
+            )
+
+    # Return the complete user-item score matrix
+    return P @ Q.T + c[None, :]
+
