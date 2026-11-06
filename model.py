@@ -2155,12 +2155,14 @@ class NeuMF:
 def train_neumf(model, users, items, train_mask,
                 steps, batch, n_neg, lr, seed):
 
-    # Convert inputs
-    users = np.asarray(users, dtype=int)
-    items = np.asarray(items, dtype=int)
+    # ------------------------------------------
+    # 1. Convert and validate inputs
+    # ------------------------------------------
+
+    users = np.asarray(users, dtype=np.int32)
+    items = np.asarray(items, dtype=np.int32)
     train_mask = np.asarray(train_mask, dtype=bool)
 
-    # Validate inputs
     if len(users) == 0:
         raise ValueError("Training interactions cannot be empty.")
 
@@ -2176,25 +2178,45 @@ def train_neumf(model, users, items, train_mask,
     if steps < 0:
         raise ValueError("steps must be non-negative.")
 
+    if lr <= 0:
+        raise ValueError("Learning rate must be positive.")
+
     if np.any(users < 0) or np.any(users >= train_mask.shape[0]):
         raise ValueError("Invalid user index.")
 
     if np.any(items < 0) or np.any(items >= train_mask.shape[1]):
         raise ValueError("Invalid item index.")
 
-    # Reproducible random generator
+    n_items = train_mask.shape[1]
+
+    # Ensure negative sampling is possible.
+    if np.all(train_mask):
+        raise ValueError("Cannot sample negatives: all interactions are observed.")
+
+    # ------------------------------------------
+    # 2. Reproducible random generator
+    # ------------------------------------------
+
     rng = np.random.default_rng([seed, 7])
+
+    # ------------------------------------------
+    # 3. Prepare model parameters
+    # ------------------------------------------
 
     params = model.parameters()
 
-    n_items = train_mask.shape[1]
+    # Enable gradient tracking on every parameter.
+    for p in params:
+        p.requires_grad = True
 
-    # Adam hyperparameters
+    # ------------------------------------------
+    # 4. Initialize Adam moments
+    # ------------------------------------------
+
     beta1 = 0.9
     beta2 = 0.999
     eps = 1e-8
 
-    # Initialize Adam moment estimates
     m = [
         np.zeros_like(p.numpy(), dtype=np.float32)
         for p in params
@@ -2205,7 +2227,10 @@ def train_neumf(model, users, items, train_mask,
         for p in params
     ]
 
-    # Fixed labels: positives followed by negatives
+    # ------------------------------------------
+    # 5. Fixed binary labels
+    # ------------------------------------------
+
     labels = np.concatenate([
         np.ones(batch, dtype=np.float32),
         np.zeros(batch * n_neg, dtype=np.float32)
@@ -2215,139 +2240,127 @@ def train_neumf(model, users, items, train_mask,
 
     losses = []
 
-    with Tensor.train():
+    # ------------------------------------------
+    # 6. Training loop
+    # ------------------------------------------
 
-        for step in range(1, steps + 1):
+    for step in range(1, steps + 1):
 
-            # ------------------------------------------
-            # 1. Sample positive interactions
-            # ------------------------------------------
+        # Sample positive interactions.
+        t = rng.integers(
+            0,
+            len(users),
+            size=batch
+        )
 
-            t = rng.integers(
-                0,
-                len(users),
-                size=batch
-            )
+        up = users[t]
+        ip = items[t]
 
-            up = users[t]
-            ip = items[t]
+        # Sample negative interactions.
+        un = np.repeat(up, n_neg)
 
-            # ------------------------------------------
-            # 2. Sample negative interactions
-            # ------------------------------------------
+        jn = rng.integers(
+            0,
+            n_items,
+            size=len(un)
+        )
 
-            un = np.repeat(up, n_neg)
+        # Reject observed interactions.
+        bad = train_mask[un, jn]
 
-            jn = rng.integers(
+        while np.any(bad):
+
+            jn[bad] = rng.integers(
                 0,
                 n_items,
-                size=len(un)
+                size=int(np.sum(bad))
             )
 
-            # Resample observed interactions
             bad = train_mask[un, jn]
 
-            while np.any(bad):
+        # Construct the complete batch.
+        batch_users = np.concatenate([
+            up,
+            un
+        ]).astype(np.int32)
 
-                jn[bad] = rng.integers(
-                    0,
-                    n_items,
-                    size=int(np.sum(bad))
+        batch_items = np.concatenate([
+            ip,
+            jn
+        ]).astype(np.int32)
+
+        u_tensor = Tensor(batch_users).contiguous().realize()
+        i_tensor = Tensor(batch_items).contiguous().realize()
+
+        # ------------------------------------------
+        # 7. Forward pass and backpropagation
+        # ------------------------------------------
+
+        for p in params:
+            p.grad = None
+
+        logits = model(u_tensor, i_tensor)
+
+        loss = logits.binary_crossentropy_logits(y)
+
+        loss.backward()
+
+        losses.append(float(loss.item()))
+
+        # ------------------------------------------
+        # 8. Collect gradients
+        # ------------------------------------------
+
+        grads = []
+
+        for p in params:
+
+            if p.grad is None:
+                grad = np.zeros_like(
+                    p.numpy(),
+                    dtype=np.float32
+                )
+            else:
+                grad = p.grad.numpy().astype(
+                    np.float32,
+                    copy=True
                 )
 
-                bad = train_mask[un, jn]
+            grads.append(grad)
 
-            # ------------------------------------------
-            # 3. Construct training batch
-            # ------------------------------------------
+        # ------------------------------------------
+        # 9. Adam parameter updates
+        # ------------------------------------------
 
-            batch_users = np.concatenate([
-                up,
-                un
-            ]).astype(np.int32)
+        for idx, (p, grad) in enumerate(zip(params, grads)):
 
-            batch_items = np.concatenate([
-                ip,
-                jn
-            ]).astype(np.int32)
+            m[idx] = (
+                beta1 * m[idx]
+                + (1.0 - beta1) * grad
+            )
 
-            u_tensor = Tensor(batch_users)
-            i_tensor = Tensor(batch_items)
+            v[idx] = (
+                beta2 * v[idx]
+                + (1.0 - beta2) * (grad ** 2)
+            )
 
-            # ------------------------------------------
-            # 4. Forward pass and backpropagation
-            # ------------------------------------------
+            m_hat = m[idx] / (1.0 - beta1 ** step)
 
-            for p in params:
-                p.grad = None
+            v_hat = v[idx] / (1.0 - beta2 ** step)
 
-            logits = model(u_tensor, i_tensor)
+            current = p.numpy().astype(
+                np.float32,
+                copy=True
+            )
 
-            loss = logits.binary_crossentropy_logits(y)
+            updated = current - lr * m_hat / (
+                np.sqrt(v_hat) + eps
+            )
 
-            loss.backward()
-
-            # Record loss before updating parameters
-            losses.append(float(loss.item()))
-
-            # ------------------------------------------
-            # 5. Extract gradients
-            # ------------------------------------------
-
-            grads = []
-
-            for p in params:
-
-                if p.grad is None:
-
-                    grads.append(
-                        np.zeros_like(p.numpy(), dtype=np.float32)
-                    )
-
-                else:
-
-                    grads.append(
-                        p.grad.numpy().astype(
-                            np.float32,
-                            copy=True
-                        )
-                    )
-
-            # ------------------------------------------
-            # 6. Apply Adam updates
-            # ------------------------------------------
-
-            for idx, (p, grad) in enumerate(zip(params, grads)):
-
-                # First moment
-                m[idx] = (
-                    beta1 * m[idx]
-                    + (1.0 - beta1) * grad
-                )
-
-                # Second moment
-                v[idx] = (
-                    beta2 * v[idx]
-                    + (1.0 - beta2) * (grad ** 2)
-                )
-
-                # Bias correction
-                m_hat = m[idx] / (1.0 - beta1 ** step)
-
-                v_hat = v[idx] / (1.0 - beta2 ** step)
-
-                # Parameter update
-                updated = (
-                    p.numpy()
-                    - lr * m_hat / (np.sqrt(v_hat) + eps)
-                )
-
-                # Assign updated parameter
-                p.assign(
-                    Tensor(
-                        updated.astype(np.float32)
-                    ).contiguous()
-                ).realize()
+            p.assign(
+                Tensor(updated.astype(np.float32))
+                .contiguous()
+            ).realize()
 
     return losses
 
