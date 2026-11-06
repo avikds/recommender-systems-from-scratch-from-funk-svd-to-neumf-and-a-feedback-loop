@@ -29,6 +29,7 @@ python scaffold.py
 - [x] **17.** leave_one_out
 - [x] **18.** rank_metrics
 - [x] **19.** sample_triples
+- [x] **20.** ranking_step
 
 ---
 

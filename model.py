@@ -1403,3 +1403,108 @@ def sample_triples(train_mask, users, items, n, rng):
     # Return user, positive item, and negative item triples
     return u, i, j
 
+# Step 20 - ranking_step
+def ranking_step(P, Q, c, u, i, j, lr, lam, loss="bpr", margin=1.0):
+
+    # Convert indices to NumPy arrays
+    u = np.asarray(u, dtype=int)
+    i = np.asarray(i, dtype=int)
+    j = np.asarray(j, dtype=int)
+
+    # --------------------------------------------------
+    # 1. Save all old parameter values
+    # --------------------------------------------------
+
+    # Copies ensure every update uses the original values
+    p_old = P[u].copy()
+    qi_old = Q[i].copy()
+    qj_old = Q[j].copy()
+
+    ci_old = c[i].copy()
+    cj_old = c[j].copy()
+
+    # --------------------------------------------------
+    # 2. Calculate positive and negative item scores
+    # --------------------------------------------------
+
+    score_positive = (
+        np.sum(p_old * qi_old, axis=1) + ci_old
+    )
+
+    score_negative = (
+        np.sum(p_old * qj_old, axis=1) + cj_old
+    )
+
+    # Score difference between positive and negative items
+    x = score_positive - score_negative
+
+    # --------------------------------------------------
+    # 3. Calculate loss and its gradient weight
+    # --------------------------------------------------
+
+    if loss == "bpr":
+
+        # BPR gradient weight
+        g = sigmoid(-x)
+
+        # Mean BPR objective
+        objective = np.mean(
+            np.logaddexp(0.0, -x)
+        )
+
+    else:
+
+        # Hinge loss gradient weight
+        g = (x < margin).astype(float)
+
+        # Mean hinge objective
+        objective = np.mean(
+            np.maximum(margin - x, 0.0)
+        )
+
+    # --------------------------------------------------
+    # 4. Calculate gradients using old parameter values
+    # --------------------------------------------------
+
+    g_col = g[:, None]
+
+    # User factor gradients
+    grad_P = (
+        g_col * (qi_old - qj_old)
+        - lam * p_old
+    )
+
+    # Positive item factor gradients
+    grad_Qi = (
+        g_col * p_old
+        - lam * qi_old
+    )
+
+    # Negative item factor gradients
+    grad_Qj = (
+        -g_col * p_old
+        - lam * qj_old
+    )
+
+    # Positive item bias gradients
+    grad_ci = g - lam * ci_old
+
+    # Negative item bias gradients
+    grad_cj = -g - lam * cj_old
+
+    # --------------------------------------------------
+    # 5. Apply updates in place
+    # --------------------------------------------------
+
+    # np.add.at correctly accumulates repeated indices
+    np.add.at(P, u, lr * grad_P)
+
+    np.add.at(Q, i, lr * grad_Qi)
+    np.add.at(Q, j, lr * grad_Qj)
+
+    np.add.at(c, i, lr * grad_ci)
+    np.add.at(c, j, lr * grad_cj)
+
+    # Return the mean objective as a Python float
+    return float(objective)
+
