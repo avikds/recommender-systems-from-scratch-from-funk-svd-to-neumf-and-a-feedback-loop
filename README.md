@@ -31,6 +31,7 @@ python scaffold.py
 - [x] **19.** sample_triples
 - [x] **20.** ranking_step
 - [x] **21.** fit_implicit_mf
+- [x] **22.** fm_forward
 
 ---
 

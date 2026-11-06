@@ -1641,3 +1641,99 @@ def fit_implicit_mf(users, items, n_users, n_items, k,
     # Return the complete user-item score matrix
     return P @ Q.T + c[None, :]
 
+# Step 22 - fm_forward
+def fm_design(users, items, tags, n_users, n_items):
+    # Convert inputs to NumPy arrays
+    users = np.asarray(users, dtype=int)
+    items = np.asarray(items, dtype=int)
+    tags = np.asarray(tags, dtype=float)
+
+    # Number of tag features
+    T = tags.shape[1]
+
+    # Number of observations
+    n = len(users)
+
+    # Initialize feature index matrix
+    idx = np.empty((n, 2 + T), dtype=int)
+
+    # Initialize feature value matrix
+    val = np.ones((n, 2 + T), dtype=float)
+
+    # Column 0: User feature indices
+    idx[:, 0] = users
+
+    # Column 1: Item feature indices
+    # Item indices start after all user features
+    idx[:, 1] = n_users + items
+
+    # Columns 2 onward: Item tag feature indices
+    idx[:, 2:] = (
+        n_users + n_items
+        + np.arange(T)[None, :]
+    )
+
+    # Assign tag values to the corresponding feature columns
+    val[:, 2:] = tags[items]
+
+    return idx, val
+
+
+def fm_forward(idx, val, mu, w, V):
+    # Convert inputs to NumPy arrays
+    idx = np.asarray(idx, dtype=int)
+    val = np.asarray(val, dtype=float)
+    w = np.asarray(w, dtype=float)
+    V = np.asarray(V, dtype=float)
+
+    # Retrieve latent factors for all active feature indices
+    # Shape: (n, number_of_features, K)
+    V_x = V[idx]
+
+    # --------------------------------------------------
+    # 1. Calculate the latent interaction sums
+    # --------------------------------------------------
+
+    # s_k = sum_j V_jk * x_j
+    s = np.sum(
+        V_x * val[:, :, None],
+        axis=1
+    )
+
+    # --------------------------------------------------
+    # 2. Calculate the linear component
+    # --------------------------------------------------
+
+    # mu + sum_j w_j * x_j
+    linear = (
+        mu
+        + np.sum(w[idx] * val, axis=1)
+    )
+
+    # --------------------------------------------------
+    # 3. Calculate the pairwise interaction component
+    # --------------------------------------------------
+
+    # First term: squared sum of latent contributions
+    sum_squared = np.sum(s ** 2, axis=1)
+
+    # Second term: sum of squared individual contributions
+    individual_squared = np.sum(
+        (V_x ** 2) * (val[:, :, None] ** 2),
+        axis=1
+    )
+
+    # Factorization Machine sum-of-squares identity
+    interactions = 0.5 * np.sum(
+        s ** 2 - individual_squared,
+        axis=1
+    )
+
+    # --------------------------------------------------
+    # 4. Calculate final predictions
+    # --------------------------------------------------
+
+    pred = linear + interactions
+
+    return pred, s
+
