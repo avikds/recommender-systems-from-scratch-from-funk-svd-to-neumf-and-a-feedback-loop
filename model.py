@@ -1900,68 +1900,66 @@ def cold_start_split(users, items, ratings, n_items, frac, seed):
     return warm, cold_rows, is_cold
 
 # Step 25 - NeuMF
+# ── Step 025  NeuMF ──
 from tinygrad import Tensor, TinyJit
 from tinygrad.nn.optim import Adam
 
 
 class NeuMF:
+
     def __init__(self, n_users, n_items, k_gmf, k_mlp,
                  hidden, seed, use_gmf=True, use_mlp=True):
 
-        # Initialize the seeded NumPy random generator
+        # Reproducible initialization
         rng = np.random.default_rng([seed, 6])
 
-        # Helper function to create realized float32 tinygrad tensors
+        # Create trainable float32 tensors
         def to_tensor(a):
             return (
-                Tensor(np.asarray(a, dtype=np.float32))
+                Tensor(
+                    np.asarray(a, dtype=np.float32),
+                    requires_grad=True
+                )
                 .contiguous()
                 .realize()
             )
 
-        # Store pathway configuration
         self.use_gmf = use_gmf
         self.use_mlp = use_mlp
 
         if not use_gmf and not use_mlp:
             raise ValueError("At least one pathway must be enabled.")
 
-        # --------------------------------------------------
-        # 1. Initialize GMF and MLP embedding tables
-        # --------------------------------------------------
+        # ------------------------------------------
+        # 1. GMF and MLP embedding tables
+        # ------------------------------------------
 
-        # GMF user embeddings
         self.P = to_tensor(
             rng.normal(0.0, 0.1, (n_users, k_gmf))
         )
 
-        # GMF item embeddings
         self.Q = to_tensor(
             rng.normal(0.0, 0.1, (n_items, k_gmf))
         )
 
-        # MLP user embeddings
         self.U = to_tensor(
             rng.normal(0.0, 0.1, (n_users, k_mlp))
         )
 
-        # MLP item embeddings
         self.V = to_tensor(
             rng.normal(0.0, 0.1, (n_items, k_mlp))
         )
 
-        # --------------------------------------------------
-        # 2. Initialize MLP layers
-        # --------------------------------------------------
+        # ------------------------------------------
+        # 2. MLP layers
+        # ------------------------------------------
 
         self.layers = []
 
-        # Initial MLP input dimension
         d = 2 * k_mlp
 
         for h in hidden:
 
-            # He initialization for layer weights
             W = to_tensor(
                 rng.normal(
                     0.0,
@@ -1970,17 +1968,15 @@ class NeuMF:
                 )
             )
 
-            # Initialize layer biases to zero
             b = to_tensor(np.zeros(h))
 
             self.layers.append((W, b))
 
-            # Update input dimension for the next layer
             d = h
 
-        # --------------------------------------------------
-        # 3. Initialize fusion weights
-        # --------------------------------------------------
+        # ------------------------------------------
+        # 3. Fusion layer
+        # ------------------------------------------
 
         width = (
             (k_gmf if use_gmf else 0)
@@ -1991,25 +1987,22 @@ class NeuMF:
             rng.normal(0.0, 0.5, width)
         )
 
-        # Global offset
         self.a = to_tensor(np.zeros(1))
 
-    # --------------------------------------------------
-    # 4. Return trainable parameters
-    # --------------------------------------------------
+    # ----------------------------------------------
+    # 4. Trainable parameters
+    # ----------------------------------------------
 
     def parameters(self):
 
         params = [self.w, self.a]
 
-        # Include GMF embeddings when GMF is enabled
         if self.use_gmf:
             params.extend([
                 self.P,
                 self.Q
             ])
 
-        # Include MLP embeddings and layer parameters
         if self.use_mlp:
 
             params.extend([
@@ -2022,9 +2015,9 @@ class NeuMF:
 
         return params
 
-    # --------------------------------------------------
+    # ----------------------------------------------
     # 5. Forward pass
-    # --------------------------------------------------
+    # ----------------------------------------------
 
     def __call__(self, u, i):
 
@@ -2033,7 +2026,6 @@ class NeuMF:
         # GMF pathway
         if self.use_gmf:
 
-            # Element-wise interaction between user and item embeddings
             z_gmf = self.P[u] * self.Q[i]
 
             active_z.append(z_gmf)
@@ -2041,53 +2033,46 @@ class NeuMF:
         # MLP pathway
         if self.use_mlp:
 
-            # Concatenate user and item embeddings
             h = self.U[u].cat(
                 self.V[i],
                 dim=1
             )
 
-            # Pass through all MLP layers
             for W, b in self.layers:
 
                 h = (h @ W + b).relu()
 
             active_z.append(h)
 
-        # --------------------------------------------------
-        # 6. Fuse active pathways
-        # --------------------------------------------------
-
-        # Concatenate the active pathway representations
+        # Concatenate active pathways
         z = active_z[0]
 
         if len(active_z) > 1:
             z = z.cat(*active_z[1:], dim=1)
 
-        # Calculate the final recommendation logits
+        # Final logits
         logits = (z * self.w).sum(axis=1) + self.a
 
         return logits
 
-    # --------------------------------------------------
-    # 7. Generate the full user-item score matrix
-    # --------------------------------------------------
+    # ----------------------------------------------
+    # 6. Full user-item score matrix
+    # ----------------------------------------------
 
     def score_matrix(self, chunk=200):
 
-        # Extract trained parameters as NumPy arrays
         w = self.w.numpy()
         a = float(self.a.numpy()[0])
 
         n_users = self.P.shape[0]
         n_items = self.Q.shape[0]
 
-        # Retrieve GMF parameters if enabled
+        # GMF parameters
         if self.use_gmf:
             P = self.P.numpy()
             Q = self.Q.numpy()
 
-        # Retrieve MLP parameters if enabled
+        # MLP parameters
         if self.use_mlp:
 
             U = self.U.numpy()
@@ -2098,7 +2083,6 @@ class NeuMF:
                 for W, b in self.layers
             ]
 
-        # Allocate the complete score matrix
         scores = np.empty(
             (n_users, n_items),
             dtype=np.float32
@@ -2112,10 +2096,7 @@ class NeuMF:
 
             active_z = []
 
-            # --------------------------------------------------
             # GMF pathway
-            # --------------------------------------------------
-
             if self.use_gmf:
 
                 z_gmf = (
@@ -2125,42 +2106,33 @@ class NeuMF:
 
                 active_z.append(z_gmf)
 
-            # --------------------------------------------------
             # MLP pathway
-            # --------------------------------------------------
-
             if self.use_mlp:
 
-                # Repeat user embeddings for every item
                 user_emb = np.broadcast_to(
                     U[start:end, None, :],
                     (current_users, n_items, U.shape[1])
                 )
 
-                # Repeat item embeddings for every user
                 item_emb = np.broadcast_to(
                     V[None, :, :],
                     (current_users, n_items, V.shape[1])
                 )
 
-                # Concatenate user and item embeddings
                 h = np.concatenate(
                     [user_emb, item_emb],
                     axis=2
                 )
 
-                # Flatten user-item pairs into a batch
                 h = h.reshape(
                     current_users * n_items,
                     -1
                 )
 
-                # Apply every MLP layer
                 for W, b in layers:
 
                     h = np.maximum(h @ W + b, 0.0)
 
-                # Restore user-item dimensions
                 z_mlp = h.reshape(
                     current_users,
                     n_items,
@@ -2169,20 +2141,190 @@ class NeuMF:
 
                 active_z.append(z_mlp)
 
-            # --------------------------------------------------
-            # Fusion layer
-            # --------------------------------------------------
-
-            # Concatenate the active pathway representations
+            # Fuse active pathways
             z = np.concatenate(
                 active_z,
                 axis=2
             )
 
-            # Calculate logits for the current user chunk
             scores[start:end] = (
                 np.sum(z * w[None, None, :], axis=2) + a
             )
 
         return scores
+
+# Step 26 - train_neumf
+# ── Step 026  train_neumf ──
+def train_neumf(model, users, items, train_mask,
+                steps, batch, n_neg, lr, seed):
+
+    users = np.asarray(users, dtype=int)
+    items = np.asarray(items, dtype=int)
+    train_mask = np.asarray(train_mask, dtype=bool)
+
+    if len(users) == 0:
+        raise ValueError("Training interactions cannot be empty.")
+    if len(users) != len(items):
+        raise ValueError("users and items must have equal lengths.")
+    if train_mask.ndim != 2:
+        raise ValueError("train_mask must be two-dimensional.")
+    if batch <= 0 or n_neg <= 0:
+        raise ValueError("batch and n_neg must be positive.")
+    if steps < 0:
+        raise ValueError("steps must be non-negative.")
+    if np.any(users < 0) or np.any(users >= train_mask.shape[0]):
+        raise ValueError("Invalid user index.")
+    if np.any(items < 0) or np.any(items >= train_mask.shape[1]):
+        raise ValueError("Invalid item index.")
+    if np.any(train_mask[users, items] == False):
+        raise ValueError("Training interactions must be marked in train_mask.")
+
+    # Reproducible negative and positive sampling
+    rng = np.random.default_rng([seed, 7])
+
+    params = model.parameters()
+    n_items = train_mask.shape[1]
+
+    # Adam hyperparameters and NumPy optimizer state
+    beta1 = 0.9
+    beta2 = 0.999
+    eps = 1e-8
+
+    m = [
+        np.zeros_like(p.numpy(), dtype=np.float32)
+        for p in params
+    ]
+    v = [
+        np.zeros_like(p.numpy(), dtype=np.float32)
+        for p in params
+    ]
+
+    # Fixed labels: positives first, followed by negatives
+    labels = np.concatenate([
+        np.ones(batch, dtype=np.float32),
+        np.zeros(batch * n_neg, dtype=np.float32)
+    ])
+
+    y = Tensor(labels).contiguous().realize()
+
+    losses = []
+
+    with Tensor.train():
+
+        for step in range(1, steps + 1):
+
+            # --------------------------------------------------
+            # 1. Sample positive interactions
+            # --------------------------------------------------
+
+            t = rng.integers(0, len(users), size=batch)
+
+            up = users[t]
+            ip = items[t]
+
+            # --------------------------------------------------
+            # 2. Sample negative items not in training history
+            # --------------------------------------------------
+
+            un = np.repeat(up, n_neg)
+
+            jn = rng.integers(
+                0,
+                n_items,
+                size=len(un)
+            )
+
+            bad = train_mask[un, jn]
+
+            while np.any(bad):
+                jn[bad] = rng.integers(
+                    0,
+                    n_items,
+                    size=int(np.sum(bad))
+                )
+                bad = train_mask[un, jn]
+
+            # --------------------------------------------------
+            # 3. Construct the training batch
+            # --------------------------------------------------
+
+            batch_users = np.concatenate([
+                up,
+                un
+            ]).astype(np.int32)
+
+            batch_items = np.concatenate([
+                ip,
+                jn
+            ]).astype(np.int32)
+
+            u_tensor = Tensor(batch_users)
+            i_tensor = Tensor(batch_items)
+
+            # --------------------------------------------------
+            # 4. Forward pass and backpropagation
+            # --------------------------------------------------
+
+            for p in params:
+                p.grad = None
+
+            logits = model(u_tensor, i_tensor)
+
+            loss = logits.binary_crossentropy_logits(y)
+
+            loss.backward()
+
+            # Record loss before changing the parameters
+            losses.append(float(loss.item()))
+
+            # --------------------------------------------------
+            # 5. Extract gradients before updating parameters
+            # --------------------------------------------------
+
+            grads = []
+
+            for p in params:
+                if p.grad is None:
+                    grads.append(np.zeros_like(p.numpy()))
+                else:
+                    grads.append(
+                        p.grad.numpy().astype(np.float32, copy=True)
+                    )
+
+            # --------------------------------------------------
+            # 6. Perform Adam updates individually
+            # --------------------------------------------------
+
+            for idx, (p, grad) in enumerate(zip(params, grads)):
+
+                # First moment
+                m[idx] = (
+                    beta1 * m[idx]
+                    + (1.0 - beta1) * grad
+                )
+
+                # Second moment
+                v[idx] = (
+                    beta2 * v[idx]
+                    + (1.0 - beta2) * (grad ** 2)
+                )
+
+                # Bias correction
+                m_hat = m[idx] / (1.0 - beta1 ** step)
+                v_hat = v[idx] / (1.0 - beta2 ** step)
+
+                # Calculate updated parameter values in NumPy
+                updated = (
+                    p.numpy()
+                    - lr * m_hat / (np.sqrt(v_hat) + eps)
+                )
+
+                # Assign and realize one parameter at a time
+                p.assign(
+                    Tensor(
+                        updated.astype(np.float32)
+                    ).contiguous()
+                ).realize()
+
+    return losses
 
