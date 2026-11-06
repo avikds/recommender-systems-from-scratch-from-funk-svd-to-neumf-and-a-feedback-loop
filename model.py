@@ -372,3 +372,50 @@ def similarity_matrix(E, mask, shrink):
 
     return similarity
 
+# Step 7 - knn_predict
+def knn_predict(S, E, mask, rows, cols, k, fallback=0.0):
+    # Convert inputs to NumPy arrays
+    S = np.asarray(S, dtype=float)
+    E = np.asarray(E, dtype=float)
+    mask = np.asarray(mask, dtype=bool)
+    rows = np.asarray(rows, dtype=int)
+    cols = np.asarray(cols, dtype=int)
+
+    # Initialize predictions with the fallback value
+    predictions = np.full(len(rows), fallback, dtype=float)
+
+    # Process each query (row, column) pair
+    for idx, (r, c) in enumerate(zip(rows, cols)):
+
+        # Find candidate neighbours that:
+        # 1. Have an observed value in the target column
+        # 2. Have positive similarity with the query row
+        candidates = np.flatnonzero(
+            mask[:, c] & (S[r, :] > 0)
+        )
+
+        # Skip if there are no candidate neighbours or k is non-positive
+        if len(candidates) == 0 or k <= 0:
+            continue
+
+        # Sort candidates by descending similarity.
+        # Stable sorting preserves lower row indices when similarities tie.
+        order = np.argsort(
+            -S[r, candidates],
+            kind="stable"
+        )
+
+        # Keep only the k most similar neighbours
+        neighbours = candidates[order[:k]]
+
+        # Retrieve their similarity weights
+        weights = S[r, neighbours]
+
+        # Calculate the similarity-weighted average
+        predictions[idx] = np.sum(
+            weights * E[neighbours, c]
+        ) / np.sum(weights)
+
+    # Return predictions as a floating-point NumPy array
+    return predictions
+
