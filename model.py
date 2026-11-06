@@ -2536,3 +2536,69 @@ def neumf_ablation(users, items, test_items, world,
     # Return all three model evaluations
     return results
 
+# Step 28 - predictive_variance
+def predictive_variance(U, V, A_u, A_v, sigma):
+
+    # Convert inputs to NumPy arrays
+    U = np.asarray(U, dtype=float)
+    V = np.asarray(V, dtype=float)
+    A_u = np.asarray(A_u, dtype=float)
+    A_v = np.asarray(A_v, dtype=float)
+
+    # ------------------------------------------
+    # 1. Construct augmented item and user vectors
+    # ------------------------------------------
+
+    # x_i = [1, V[i, 1:]]
+    X_i = np.column_stack([
+        np.ones(V.shape[0]),
+        V[:, 1:]
+    ])
+
+    # z_u = [1, U[u, 1:]]
+    Z_u = np.column_stack([
+        np.ones(U.shape[0]),
+        U[:, 1:]
+    ])
+
+    # ------------------------------------------
+    # 2. Invert user and item covariance matrices
+    # ------------------------------------------
+
+    S_u = np.linalg.inv(A_u)
+    S_v = np.linalg.inv(A_v)
+
+    # ------------------------------------------
+    # 3. User-side uncertainty contribution
+    # ------------------------------------------
+
+    # x_i.T @ inv(A_u[u]) @ x_i
+    # Result shape: (n_users, n_items)
+    user_term = np.einsum(
+        "id,udk,ik->ui",
+        X_i,
+        S_u,
+        X_i
+    )
+
+    # ------------------------------------------
+    # 4. Item-side uncertainty contribution
+    # ------------------------------------------
+
+    # z_u.T @ inv(A_v[i]) @ z_u
+    # Result shape: (n_users, n_items)
+    item_term = np.einsum(
+        "ud,idk,uk->ui",
+        Z_u,
+        S_v,
+        Z_u
+    )
+
+    # ------------------------------------------
+    # 5. Combine both uncertainty contributions
+    # ------------------------------------------
+
+    variance = sigma ** 2 * (user_term + item_term)
+
+    return variance
+

@@ -37,6 +37,7 @@ python scaffold.py
 - [x] **25.** NeuMF
 - [x] **26.** train_neumf
 - [x] **27.** neumf_ablation
+- [x] **28.** predictive_variance
 
 ---
 
