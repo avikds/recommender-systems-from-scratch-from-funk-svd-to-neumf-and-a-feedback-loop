@@ -904,3 +904,106 @@ def offline_vs_truth(params, test, world):
         "true_mean": true_mean
     }
 
+# Step 15 - autorec_loss_grads
+def sigmoid(a):
+    # Clip values to prevent numerical overflow
+    a = np.clip(a, -30.0, 30.0)
+
+    # Apply the sigmoid activation function
+    return 1.0 / (1.0 + np.exp(-a))
+
+
+def autorec_forward(Y, V, mu, W, b):
+    # Convert inputs to NumPy arrays
+    Y = np.asarray(Y, dtype=float)
+
+    # Compute the hidden layer representation
+    # H = sigmoid(Y @ V.T + mu)
+    H = sigmoid(Y @ V.T + mu)
+
+    # Reconstruct the input rating vectors
+    # output = H @ W + b
+    output = H @ W + b
+
+    return output, H
+
+
+def autorec_loss_grads(Y, mask, V, mu, W, b, lam):
+    # Convert inputs to floating-point NumPy arrays
+    Y = np.asarray(Y, dtype=float)
+    mask = np.asarray(mask, dtype=float)
+    V = np.asarray(V, dtype=float)
+    mu = np.asarray(mu, dtype=float)
+    W = np.asarray(W, dtype=float)
+    b = np.asarray(b, dtype=float)
+
+    # --------------------------------------------------
+    # 1. Forward pass
+    # --------------------------------------------------
+
+    output, H = autorec_forward(Y, V, mu, W, b)
+
+    # Calculate reconstruction error only for observed entries
+    err = (output - Y) * mask
+
+    # --------------------------------------------------
+    # 2. Calculate the masked reconstruction loss
+    # --------------------------------------------------
+
+    loss = (
+        np.sum(err ** 2)
+        + (lam / 2.0) * (
+            np.sum(W ** 2) + np.sum(V ** 2)
+        )
+    )
+
+    # --------------------------------------------------
+    # 3. Calculate gradients with respect to output
+    # --------------------------------------------------
+
+    # Gradient of squared reconstruction error
+    grad_output = 2.0 * err
+
+    # --------------------------------------------------
+    # 4. Calculate gradients for W and b
+    # --------------------------------------------------
+
+    # Gradient with respect to output weights
+    grad_W = H.T @ grad_output + lam * W
+
+    # Gradient with respect to output bias
+    grad_b = np.sum(grad_output, axis=0)
+
+    # --------------------------------------------------
+    # 5. Backpropagate through the hidden layer
+    # --------------------------------------------------
+
+    # Gradient with respect to hidden activations
+    grad_H = grad_output @ W.T
+
+    # Derivative of the sigmoid activation
+    grad_Z = grad_H * H * (1.0 - H)
+
+    # --------------------------------------------------
+    # 6. Calculate gradients for V and mu
+    # --------------------------------------------------
+
+    # Gradient with respect to encoder weights
+    grad_V = grad_Z.T @ Y + lam * V
+
+    # Gradient with respect to hidden layer bias
+    grad_mu = np.sum(grad_Z, axis=0)
+
+    # --------------------------------------------------
+    # 7. Return loss and all parameter gradients
+    # --------------------------------------------------
+
+    grads = {
+        "V": grad_V,
+        "mu": grad_mu,
+        "W": grad_W,
+        "b": grad_b
+    }
+
+    return float(loss), grads
+
