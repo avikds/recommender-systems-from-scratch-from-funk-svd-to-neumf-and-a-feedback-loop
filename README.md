@@ -40,7 +40,3 @@ python scaffold.py
 - [x] **28.** predictive_variance
 - [x] **29.** run_feedback_loop
 - [x] **30.** recsys_report
-
----
-
-Built on Deep-ML.
